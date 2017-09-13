@@ -23,7 +23,6 @@ Clear RStudio
   # cat(rep("\n",50)) # Clear Console
   rm(list=ls(all=TRUE)) # clear workspace
   graphics.off() # closes all graphics
-  # setwd("C:/Users/Ryan/Google Drive/UC Davis/Publications/MFC Microbiome Paper - Experiment 15") # sets working directory
 ```
 
 Install function for needed packages
