@@ -81,7 +81,24 @@ plot_grid(plot_acetate, plot_temp, align='h', labels=c('a', 'b'))
 
 ```
 Is there a better point in time to analyze this data? Let's run this against multiple time points and find which creates the best model.
-```{r}
+```{r apply to multiple time points}
+all_p_values <- as.data.frame(matrix(NA,ncol(data_training)-4,7))
+
+packages(broom) 
+
+
+# Start loop
+for(i in 5:ncol(data_training)){
+model <- rsm(data_training[,i] ~ SO(temp, acetate), data = data_training)
+all_p_values[i-4,] <- c(colnames(data_training)[i],tidy(model)$p.value) # get coefficient table as a data frame https://stackoverflow.com/questions/31570440/extract-regression-p-value-in-r
+}
+#End Loop
+
+# Append column names
+colnames(all_p_values) <- c("Time",tidy(model)$term)
+all_p_values
+
+# Plot
 
 ```
-
+Now let's load in all the cycle 5 data so far.
