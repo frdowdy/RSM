@@ -81,7 +81,7 @@ plot_grid(plot_acetate, plot_temp, align='h', labels=c('a', 'b'))
 
 ```
 Is there a better point in time to analyze this data? Let's run this against multiple time points and find which creates the best model.
-```{r apply to multiple time points}
+```{r apply p value to multiple cycles}
 all_p_values <- as.data.frame(matrix(NA,ncol(data_training)-4,7))
 
 packages(broom) 
@@ -90,7 +90,7 @@ packages(broom)
 # Start loop
 for(i in 5:ncol(data_training)){
 model <- rsm(data_training[,i] ~ SO(temp, acetate), data = data_training)
-all_p_values[i-4,] <- c(colnames(data_training)[i],tidy(model)$p.value) # get coefficient table as a data frame https://stackoverflow.com/questions/31570440/extract-regression-p-value-in-r
+all_p_values[i-4,] <- c(colnames(data_training)[i],as.numeric(tidy(model)$p.value)) # get coefficient table as a data frame https://stackoverflow.com/questions/31570440/extract-regression-p-value-in-r
 }
 #End Loop
 
@@ -98,7 +98,117 @@ all_p_values[i-4,] <- c(colnames(data_training)[i],tidy(model)$p.value) # get co
 colnames(all_p_values) <- c("Time",tidy(model)$term)
 all_p_values
 
-# Plot
+# Turn character into numbers
+all_p_values[,2:7] <- as.numeric(unlist(all_p_values[,2:7]))
 
+#Reshape
+packages(reshape2)
+all_p_values <- melt(all_p_values)
+
+# Plot
+ggplot(data=all_p_values, aes(Time,value, group=variable)) + 
+  geom_line(aes(color=variable))+
+  geom_point(aes(color=variable))+
+  xlab("Cycle")+
+  ylab("p value")+
+  geom_hline(yintercept = .05)
+  # +   scale_x_date(format = "%b-%Y") + xlab("") + ylab("Daily Views")
 ```
 Now let's load in all the cycle 5 data so far.
+```{r all cycle 5 timepoints}
+
+# import data
+cycle_5_data <- as.data.frame(read.csv("cycle_5_data.csv"))
+# get into correct form
+# remove first two columns
+cycle_5_data <- cycle_5_data[,-c(1:2)]
+
+#transpose
+# first remember the names
+n <- cycle_5_data[,1]
+cycle_5_data <- as.data.frame(t(cycle_5_data[,-1]))
+colnames(cycle_5_data) <- n
+cycle_5_data$myfactor <- factor(row.names(cycle_5_data))
+
+
+
+#knit to past data
+cycle_5_rsm <- cbind(data[,c(1:4)],cycle_5_data)
+
+#Take out rows 14 and 15
+cycle_5_rsm <- cycle_5_rsm[-c(14:15),]
+
+# last col seems to contain row names. take out
+cycle_5_rsm <- cycle_5_rsm[,-922]
+
+# Previous code
+# Create blank matrix to fill in with p values
+all_p_values <- as.data.frame(matrix(NA,ncol(cycle_5_rsm)-4,7))
+
+packages(broom) 
+
+
+# Start loop
+for(i in 5:ncol(cycle_5_rsm)){
+model <- rsm(cycle_5_rsm[,i] ~ SO(temp, acetate), data = cycle_5_rsm)
+all_p_values[i-4,] <- c(colnames(cycle_5_rsm)[i],as.numeric(tidy(model)$p.value)) # get coefficient table as a data frame https://stackoverflow.com/questions/31570440/extract-regression-p-value-in-r
+}
+#End Loop
+
+# Append column names
+colnames(all_p_values) <- c("Time",tidy(model)$term)
+all_p_values
+
+# Turn character into numbers
+all_p_values[,2:7] <- as.numeric(unlist(all_p_values[,2:7]))
+
+#Reshape
+packages(reshape2)
+all_p_values <- melt(all_p_values)
+
+# Plot
+ggplot(data=all_p_values, aes(Time,value, group=variable)) + 
+  geom_line(aes(color=variable))+
+  geom_point(aes(color=variable))+
+  xlab("Cycle 5 time point")+
+  ylab("p value")+
+  geom_hline(yintercept = .05)
+
+```
+Wow let's zoom in on that recent time period where a couple of terms become significant.
+```{r recent cycle 5}
+all_p_values$Time <- as.numeric(all_p_values$Time)
+
+ggplot(data=all_p_values, aes(Time,value, group=variable)) + 
+  geom_line(aes(color=variable))+
+  geom_point(aes(color=variable))+
+  xlab("Cycle 5 time point")+
+  ylab("p value")+
+  geom_hline(yintercept = .05)+
+  xlim(43001,NA)
+```
+Wow now let's zoom in even more.
+```{r recent cycle 5 zoom}
+all_p_values$Time <- as.numeric(all_p_values$Time)
+
+ggplot(data=all_p_values, aes(Time,value, group=variable)) + 
+  geom_line(aes(color=variable))+
+  geom_point(aes(color=variable))+
+  xlab("Cycle 5 time point")+
+  ylab("p value")+
+  geom_hline(yintercept = .05)+
+  xlim(43003,NA)
+```
+What happens if we do an RSM with the most recent data?
+```{r RSM voltage_cycle_5 recent}
+rsm5 <- rsm(cycle_5_rsm[,ncol(cycle_5_rsm)] ~ SO(temp, acetate), data = cycle_5_rsm)
+summary(rsm5)
+persp(rsm5, ~ temp + acetate, col = rainbow(50), contours = "colors")
+contour(rsm5, ~ temp + acetate, col = rainbow(50), contours = "colors")
+
+#Look at slices against each factor
+plot_acetate <- ggplot(data_training, aes(acetate, voltage_cycle_5)) + geom_point() + theme_few()
+plot_temp <- ggplot(data_training, aes(temp, voltage_cycle_5)) + geom_point() + theme_few() 
+plot_grid(plot_acetate, plot_temp, align='h', labels=c('a', 'b'))
+
+```
