@@ -36,6 +36,7 @@ Install function for needed packages
     }
   }
   packages(rsm)
+  packages(tidyverse)
 ```
 
 
@@ -44,7 +45,7 @@ Install function for needed packages
 packages(XLConnect)
 data <- readWorksheetFromFile("preliminary_RSM.xlsx",sheet=1)
 
-# Withhold validation points from dataet
+# Withhold validation points from dataset
 data_training <- data[1:13,]
 ```
 
@@ -116,7 +117,6 @@ ggplot(data=all_p_values, aes(Time,value, group=variable)) +
 ```
 Now let's load in all the cycle 5 data so far.
 ```{r all cycle 5 timepoints}
-
 # import data
 cycle_5_data <- as.data.frame(read.csv("cycle_5_data.csv"))
 # get into correct form
@@ -201,7 +201,7 @@ ggplot(data=all_p_values, aes(Time,value, group=variable)) +
 ```
 What happens if we do an RSM with the most recent data?
 ```{r RSM voltage_cycle_5 recent}
-rsm5 <- rsm(cycle_5_rsm[,ncol(cycle_5_rsm)] ~ SO(temp, acetate), data = cycle_5_rsm)
+rsm5 <- rsm(cycle_5_rsm[,ncol(cycle_5_rsm)-3] ~ SO(temp, acetate), data = cycle_5_rsm)
 summary(rsm5)
 persp(rsm5, ~ temp + acetate, col = rainbow(50), contours = "colors")
 contour(rsm5, ~ temp + acetate, col = rainbow(50), contours = "colors")
@@ -212,3 +212,262 @@ plot_temp <- ggplot(data_training, aes(temp, voltage_cycle_5)) + geom_point() + 
 plot_grid(plot_acetate, plot_temp, align='h', labels=c('a', 'b'))
 
 ```
+Great let's transform the voltage data to power data given that the external voltage was constant at 1000 ohms.
+```{r}
+#Power in Watts
+resistance <- 1000
+myData <- cycle_5_rsm
+
+myData[,5:ncol(myData)] <- myData[,5:ncol(myData)]^2/resistance #voltage squared divided by resistance
+
+# RSM
+rsm5 <- rsm(myData[,ncol(myData)-3] ~ SO(temp, acetate), data = myData)
+summary(rsm5) # throws an error here
+# persp(rsm5, ~ temp + acetate, col = rainbow(50), contours = "colors")
+# contour(rsm5, ~ temp + acetate, col = rainbow(50), contours = "colors")
+# 
+# #Look at slices against each factor
+# plot_acetate <- ggplot(data_training, aes(acetate, voltage_cycle_5)) + geom_point() + theme_few()
+# plot_temp <- ggplot(data_training, aes(temp, voltage_cycle_5)) + geom_point() + theme_few() 
+# plot_grid(plot_acetate, plot_temp, align='h', labels=c('a', 'b'))
+```
+Let's see if we can import our COD data. Did COD reduction differ significantly between units or across cycles?
+```{r}
+#Import
+packages(readr)
+cod <- read_csv("cod_results.csv",col_types = cols(MFC = "c"))
+cod
+#get in long format. Columns: mfcNumber, cycleNumber, endCOD, CODReductionPercent
+cod <- melt(cod)
+names(cod)[names(cod) == 'variable'] <- 'cycle'
+names(cod)[names(cod) == 'MFC'] <- 'mfc'
+names(cod)[names(cod) == 'value'] <- 'cod_mg_L'
+cod$cod_mg_L <- cod$cod_mg_L*100
+head(cod)
+
+initial_cod <- 42067
+cod$delta_cod_mg_L <- initial_cod-cod$cod_mg_L
+cod$reduction_percent <- cod$delta_cod_mg_L/initial_cod
+
+# plot
+ggplot(data=cod, aes(x = cycle,reduction_percent, group=mfc)) + 
+  geom_line(aes(color=mfc))+
+  geom_point(aes(color=mfc))+
+  xlab("Cycle")+
+  ylab("COD Reduction (%)")
+# run analysis
+write_csv(cod,"cod_output_from_R.csv")
+cod$cycle <- as.numeric(cod$cycle)
+model <- lm(reduction_percent~mfc*cycle,data = cod)
+anova(model)
+
+```
+
+```{r anova on just reduction percent fit to cycle}
+cod$cycle <- as.factor(cod$cycle)
+# 
+# Fit a model using the lm function and look at the parameter estimates and standard errors for the treatment effects
+  # https://www.r-bloggers.com/one-way-analysis-of-variance-anova/
+  model = lm(reduction_percent ~ cycle, data = cod)
+  # We save the model fitted to the data in an object so that we can undertake various actions to study the goodness of the fit to the data and other model assumptions. 
+  # summary(model)
+  # An analysis of variance table for this model can be produced via the anova command
+  anova.model = anova(model)
+  anova.model
+  
+  
+# Alternative method (http://personality-project.org/r/r.guide/r.anova.html)
+  aov_model = aov(reduction_percent ~ cycle, data = cod)  #do the analysis of variance
+  cat("\n")
+  summary(aov_model)                                    #show the summary table
+  cat("\n")
+  print(model.tables(aov_model,"means"),digits=3)       #report the means and the number of subjects/cell
+  
+# Interpret the Omnibus ANOVA Test Results  
+  pvaluecolumn <- anova.model$"Pr(>F)" # Extracts p RA_cluster_in_label column
+  pvalue = pvaluecolumn[1] # Extracts first row from p RA_cluster_in_label column
+  cat("\n")
+  cat("ANOVA p value is",pvalue,"\n") # Displays p value
+  if (pvalue>.05) {
+    writeLines("Results are not significant. Fail to reject null hypothesis.")
+  } else {
+    writeLines("Results are significant. Reject null hypothesis.")
+  }
+
+# Run Post-Hoc Tukey HSD between treatment groups
+  cat("\n")
+ 
+TukeyHSD(aov_model)
+```
+Does Cycle 5 COD reduction percent fit to our response surface? It doesn't seem to.
+```{r}
+# get cycle 5 cod data
+rsm_cols <- data[,-c(5:ncol(data))]
+
+cycle_5_rsm <- cbind(rsm_cols,cod$reduction_percent[cod$cycle %in% 5])
+colnames(cycle_5_rsm)[5] <- "cod_reduction_percent"
+
+#Build model
+cycle_5_rsm_training <- cycle_5_rsm[-c(14:15),]
+rsmModel <- rsm(cod_reduction_percent ~ SO(temp, acetate), data = cycle_5_rsm_training)
+summary(rsmModel)
+persp(rsmModel, ~ temp + acetate, col = rainbow(50), contours = "colors")
+contour(rsmModel, ~ temp + acetate, col = rainbow(50), contours = "colors")
+
+#Look at slices against each factor
+plot_acetate <- ggplot(cycle_5_rsm_training, aes(acetate, cod_reduction_percent)) + geom_point() + theme_few()
+plot_temp <- ggplot(cycle_5_rsm_training, aes(temp, cod_reduction_percent)) + geom_point() + theme_few()
+plot_grid(plot_acetate, plot_temp, align='h', labels=c('a', 'b'))
+```
+Did time periods differ for each cycle? Maybe we should normalize by cod reduction per day, then rerun analysis.
+```{r get cycle times}
+library(lubridate)
+cycleTimes <- read_csv("cycleTimes.csv")
+cycleTimes$start <- mdy(cycleTimes$start)
+cycleTimes$end <- mdy(cycleTimes$end)
+cycleTimes$duration_days <- cycleTimes$end-cycleTimes$start
+```
+
+```{r analyze with cod reduction normalized to cycle times}
+cod <- as_tibble(cod)
+cod$cycle_duration <- unlist(cycleTimes[match(cod$cycle,cycleTimes$cycle),"duration_days"])
+packages(tibbletime)
+cod$delta_cod_mg_L_day <- cod$delta_cod_mg_L/cod$cycle_duration
+
+#plot
+ggplot(data=cod, aes(x = cycle,delta_cod_mg_L_day, group=mfc)) + 
+  geom_line(aes(color=mfc))+
+  geom_point(aes(color=mfc))+
+  xlab("Cycle")+
+  ylab("COD Reduction (mg/L/day)")
+
+# run analysis
+write_csv(cod,"cod_output_from_R_time_normalized.csv")
+cod$cycle <- as.numeric(cod$cycle)
+model <- lm(delta_cod_mg_L_day~mfc*cycle,data = cod)
+anova(model)
+
+# try data transformation
+# check for normality
+hist(cod$delta_cod_mg_L_day)
+packages(ggpubr)
+ggqqplot(cod$delta_cod_mg_L_day)
+shapiro.test(cod$delta_cod_mg_L_day) # if p<.05, reject null hypothesis that data is normal, there is evidence data not normal
+
+#preprocess
+packages(caret)
+packages(e1071)
+trans = preProcess(data.frame(cod[,"delta_cod_mg_L_day"]), c("BoxCox", "center", "scale"))
+cod_trans = data.frame(trans = predict(trans, data.frame(cod[,"delta_cod_mg_L_day"])))
+# Visualize again
+hist(unlist(cod_trans))
+ggqqplot(unlist(cod_trans))
+shapiro.test(unlist(cod_trans))
+# Attach transformed variables to data set
+colnames(cod_trans) <- "trans_delta_cod_mg_L_day"
+cod <- cbind(cod,cod_trans)
+write_csv(cod,"cod_output_from_R.csv")
+# analyze
+trans_model <- lm(trans_delta_cod_mg_L_day~mfc*cycle,data = cod)
+anova(trans_model)
+```
+The transformed is essentially the same results as the initial delta cod mg/L/day. Regardless of transformation, it seems that COD doesn't differ significantly across MFC or cycle number when normalized to cycle time. However, anova on delta cod mg/L/day to MFC is not significant, while anova on delta cod mg/L/day to cycle as a nominal variable is significant. It seems Cycles 1, 2, and 5 experienced significantly higher COD reductions than cycles 3 and 4 as a group. Not sure why this happened. 
+
+Does Cycle 5 COD reduction (delta_cod_mg_L_day) fit to our response surface?
+```{r}
+#attach relevant data
+cycle_5_rsm <- cbind(rsm_cols,cod$delta_cod_mg_L_day[cod$cycle %in% 5])
+colnames(cycle_5_rsm)[5] <- "delta_cod_mg_L_day"
+
+#Build model
+cycle_5_rsm_training <- cycle_5_rsm[-c(14:15),] #take off validation points
+rsmModel <- rsm(delta_cod_mg_L_day ~ SO(temp, acetate), data = cycle_5_rsm_training)
+summary(rsmModel)
+persp(rsmModel, ~ temp + acetate, col = rainbow(50), contours = "colors")
+contour(rsmModel, ~ temp + acetate, col = rainbow(50), contours = "colors")
+
+#Look at slices against each factor
+plot_acetate <- ggplot(cycle_5_rsm_training, aes(acetate, delta_cod_mg_L_day)) + geom_point() + theme_few()
+plot_temp <- ggplot(cycle_5_rsm_training, aes(temp, delta_cod_mg_L_day)) + geom_point() + theme_few()
+plot_grid(plot_acetate, plot_temp, align='h', labels=c('a', 'b'))
+```
+It looks like the cycle 5 delta_cod_mg_L_day doesn't fit to the response surface either. So the higher voltages seen in response to temperature and acetate must be due to either enhanced efficiency of bioelectrochemical activity by the biofilm or pure noise.
+
+Now let's pull in all the voltage data over all times. Then we can integrate to find coulombic efficiency.
+```{r pull in all voltage data}
+voltage_data <- rbind(read_csv('voltage_1.csv'),read_csv('voltage_2.csv'))
+voltage_data <- voltage_data[,-18] #lop off channel 16 which wasn't used
+voltage_data$Date <- mdy(voltage_data$Date)
+voltage_data$dateTime <- with(voltage_data, ymd(voltage_data$Date) + hms(voltage_data$Time)) #https://stackoverflow.com/questions/11609252/r-tick-data-merging-date-and-time-into-a-single-object
+# double check this worked
+
+voltage_data <- select(voltage_data,dateTime,everything()) #move dateTime to front
+voltage_data$dateTime <- as.POSIXct(voltage_data$dateTime)
+voltage_data <- voltage_data[order(voltage_data$dateTime),] #make sure in order
+
+# remove bad data from voltage collector crashing
+voltage_data <- voltage_data[year(voltage_data$dateTime) < 2018,]
+
+
+#We missed some data when the picologger crashed. Let's interpolate around 9/20/2017.
+voltage_data[voltage_data$Date < "2017-09-21" & voltage_data$Date > "2017-09-18",]
+plot(voltage_data[voltage_data$Date > "2017-09-18" & voltage_data$Date < "2017-09-21","dateTime"])
+# Looks like 6000 duplicate rows when it crashed. Let's remove those first then interpolate.
+plot(voltage_data[voltage_data$Date > "2017-09-18" & voltage_data$Date < "2017-09-21","dateTime"])
+plot(voltage_data[which(duplicated(voltage_data$dateTime)),"dateTime"])
+plot(voltage_data[-which(duplicated(voltage_data$dateTime)),"dateTime"])
+voltage_data <- voltage_data[-which(duplicated(voltage_data$dateTime)),]
+
+
+# between 2017-09-19 04:32:22 and 2017-09-20 10:21:51
+plot(test$dateTime)
+# remove 2017-09-19 04:33:22 thru 2017-09-19 04:40:22
+voltage_data <- voltage_data[-which(format(voltage_data$Time, "%H:%M:$S") >= "04:33:22" & format(voltage_data$Time, "%H:%M:$S") <= "04:40:22"),]
+plot(voltage_data[voltage_data$Date > "2017-09-18" & voltage_data$Date < "2017-09-21","dateTime"])
+
+#Now let's interpolate between our missing times.
+
+# between 2017-09-19 04:32:22 and 2017-09-20 10:21:51
+test <- voltage_data[voltage_data$Date > "2017-09-18" & voltage_data$Date < "2017-09-21",]
+test_melt <- gather(test,"mfc","voltage",4:ncol(voltage_data))
+
+#Visualize
+ggplot(data=test_melt, aes(x = dateTime,y = voltage, group=mfc)) + 
+  geom_line(aes(color=mfc))+
+  geom_point(aes(color=mfc))+
+  xlab("Time")+
+  ylab("Voltage (V)")
+
+#interpolate test data set
+packages(padr)
+test$dateTime <- as.POSIXct(format(test$dateTime, "%Y-%m-%d %H:%M:00")) #strip off seconds so padr doesn't get confused
+test$dateTime[15] <- as.POSIXct("2017-09-20 10:32:00")
+paddedTime <- test %>% pad(interval="20 min",by = 'dateTime',start_val=as.POSIXct("2017-09-19 04:32:00"),end_val=as.POSIXct("2017-09-20 10:32:00"))
+paddedTime <- paddedTime[-1,] #remove first row
+paddedTime <- paddedTime[-nrow(paddedTime),]
+
+#put paddedTime back into test data frame
+test <- rbind(test,paddedTime)
+test <- test[order(test$dateTime),] #it works
+
+#put paddedTime back into voltage_data data frame
+# are there any NAs currently in voltage_data?
+voltage_data[is.na(voltage_data$Date),] #don't seem to be
+voltage_data <- rbind(paddedTime,voltage_data) 
+voltage_data <- voltage_data[order(voltage_data$dateTime),]
+# fill with some function
+View(voltage_data[voltage_data$dateTime > as.Date("2017-09-18") & voltage_data$dateTime < as.Date("2017-09-21"),])
+
+```
+
+Now let's apply cycle numbers to the voltage_data set to calculate power production over each cycle and MFC as well as coulombic efficiency for each cycle and MFC.
+```{r}
+# Find points in voltage_data where voltage is 0, use those as time points for marking distinct cycles
+ggplot(data=voltage_melt, aes(x = dateTime,y = voltage, group=mfc)) + 
+  geom_line(aes(color=mfc))+
+  geom_point(aes(color=mfc))+
+  xlab("Time")+
+  ylab("Voltage (V)")+
+  ylim(0,.00125)
+```
+
