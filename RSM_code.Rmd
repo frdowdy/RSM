@@ -37,6 +37,7 @@ Install function for needed packages
   }
   packages(rsm)
   packages(tidyverse)
+  packages(pracma)
 ```
 
 
@@ -399,16 +400,17 @@ voltage_data <- rbind(read_csv('voltage_1.csv'),read_csv('voltage_2.csv'))
 voltage_data <- voltage_data[,-18] #lop off channel 16 which wasn't used
 voltage_data$Date <- mdy(voltage_data$Date)
 voltage_data$dateTime <- with(voltage_data, ymd(voltage_data$Date) + hms(voltage_data$Time)) #https://stackoverflow.com/questions/11609252/r-tick-data-merging-date-and-time-into-a-single-object
-# double check this worked
 
 voltage_data <- select(voltage_data,dateTime,everything()) #move dateTime to front
 voltage_data$dateTime <- as.POSIXct(voltage_data$dateTime)
+
 voltage_data <- voltage_data[order(voltage_data$dateTime),] #make sure in order
+
+# double check this worked - do any times not match with their date times?
+voltage_data[format(voltage_data$dateTime, "%H:%M:%S") != format(voltage_data$Time, "%H:%M:%S"),] # everything matches up
 
 # remove bad data from voltage collector crashing
 voltage_data <- voltage_data[year(voltage_data$dateTime) < 2018,]
-
-
 #We missed some data when the picologger crashed. Let's interpolate around 9/20/2017.
 voltage_data[voltage_data$Date < "2017-09-21" & voltage_data$Date > "2017-09-18",]
 plot(voltage_data[voltage_data$Date > "2017-09-18" & voltage_data$Date < "2017-09-21","dateTime"])
@@ -418,9 +420,6 @@ plot(voltage_data[which(duplicated(voltage_data$dateTime)),"dateTime"])
 plot(voltage_data[-which(duplicated(voltage_data$dateTime)),"dateTime"])
 voltage_data <- voltage_data[-which(duplicated(voltage_data$dateTime)),]
 
-
-# between 2017-09-19 04:32:22 and 2017-09-20 10:21:51
-plot(test$dateTime)
 # remove 2017-09-19 04:33:22 thru 2017-09-19 04:40:22
 voltage_data <- voltage_data[-which(format(voltage_data$Time, "%H:%M:$S") >= "04:33:22" & format(voltage_data$Time, "%H:%M:$S") <= "04:40:22"),]
 plot(voltage_data[voltage_data$Date > "2017-09-18" & voltage_data$Date < "2017-09-21","dateTime"])
@@ -453,21 +452,281 @@ test <- test[order(test$dateTime),] #it works
 #put paddedTime back into voltage_data data frame
 # are there any NAs currently in voltage_data?
 voltage_data[is.na(voltage_data$Date),] #don't seem to be
-voltage_data <- rbind(paddedTime,voltage_data) 
-voltage_data <- voltage_data[order(voltage_data$dateTime),]
-# fill with some function
-View(voltage_data[voltage_data$dateTime > as.Date("2017-09-18") & voltage_data$dateTime < as.Date("2017-09-21"),])
+voltage_data[format(voltage_data$dateTime, "%H:%M:%S") != format(voltage_data$Time, "%H:%M:%S"),] # works fine here
+```
 
+```{r}
+voltage_data <- bind_rows(paddedTime,voltage_data) # bind together - this is where it goes wrong. Times and dateTimes no longer match.
+voltage_data[1:89,1] <- voltage_data[1:89,1] - 7*60*60 #workaround
+voltage_data <- voltage_data[order(voltage_data$dateTime),]
+# fill with polynomial interpolation
+packages(zoo)
+voltage_data[,c(4:ncol(voltage_data))] <- na.approx(voltage_data[,c(4:ncol(voltage_data))])
+#visualize
+# between 2017-09-19 04:32:22 and 2017-09-20 10:21:51
+test <- voltage_data[voltage_data$dateTime > as.Date("2017-09-18") & voltage_data$dateTime < as.Date("2017-09-21"),]
+test_melt <- gather(test,"mfc","voltage",4:ncol(voltage_data))
+#Visualize
+ggplot(data=test_melt, aes(x = dateTime,y = voltage, group=mfc)) + 
+  geom_line(aes(color=mfc))+
+  geom_point(aes(color=mfc))+
+  xlab("Time")+
+  ylab("Voltage (V)")
+# Visualize whole data set
+test_melt <- gather(voltage_data,"mfc","voltage",4:ncol(voltage_data))
+ggplot(data=test_melt, aes(x = dateTime,y = voltage, group=mfc)) + 
+  geom_line(aes(color=mfc))+
+  geom_point(aes(color=mfc))+
+  xlab("Time")+
+  ylab("Voltage (V)")
+# nice work!
 ```
 
 Now let's apply cycle numbers to the voltage_data set to calculate power production over each cycle and MFC as well as coulombic efficiency for each cycle and MFC.
 ```{r}
 # Find points in voltage_data where voltage is 0, use those as time points for marking distinct cycles
-ggplot(data=voltage_melt, aes(x = dateTime,y = voltage, group=mfc)) + 
+cycleTimes$end <- as.POSIXct(c("2017-08-07 15:52:22", "2017-08-15 11:12:22", "2017-08-29 10:52:22", "2017-09-11 15:32:22", "2017-09-26 16:01:51"))
+#lookup 
+voltage_data <- cbind(voltage_data,cycleTimes[match(voltage_data$dateTime,cycleTimes$end),"cycle"])
+voltage_data[!is.na(voltage_data$cycle),]
+voltage_data$cycle[nrow(voltage_data)] <- 5
+# fill up
+voltage_data$cycle <- as.numeric(voltage_data$cycle)
+voltage_data %>% fill(cycle, .direction = "up") -> voltage_data
+# move
+voltage_data <- select(voltage_data,dateTime,cycle,everything())
+#remove date and time because it seems to just be causing issues
+voltage_data <- select(voltage_data,everything(),-Date,-Time)
+```
+Next let's calculate power production for each mfc for each cycle. Then we can do some analysis on that before moving to coulombic efficiency.
+```{r}
+voltage_melt <- gather(voltage_data,"mfc","voltage",3:ncol(voltage_data)) 
+power_melt <- voltage_melt
+power_melt <- power_melt[,-ncol(power_melt)]
+power_melt$power_J_s <- voltage_melt$voltage^2/resistance
+power_melt <- as.tibble(power_melt)
+#integrate for power output or energy in Joules
+power_output <- ddply(power_melt, .(cycle, mfc), summarize, energy_J = trapz(as.numeric(dateTime),power_J_s))
+#check it worked
+# it did - checked in excel
+#visualize
+ggplot(data=power_output, aes(x = cycle,y = energy_J, group=mfc)) + 
   geom_line(aes(color=mfc))+
   geom_point(aes(color=mfc))+
-  xlab("Time")+
-  ylab("Voltage (V)")+
-  ylim(0,.00125)
+  xlab("Cycle")+
+  ylab("Energy produced (J)")
+
+#analysis
+power_output %>% lm(energy_J~cycle*mfc,.) %>% anova()
+#cycle seems highly signficant
+power_output %>% lm(energy_J~cycle,.) %>% anova()
+summary(aov(energy_J~as.factor(cycle),data=power_output))
+TukeyHSD(aov(energy_J~as.factor(cycle),data=power_output))
+#mfc doesn't have a significant effect on power output
+plot(power_output$mfc,power_output$energy_J)
+summary(aov(energy_J~mfc,data=power_output))
+#fit power output for each cycle to response surface
+power_output %>% spread(.,cycle,energy_J) -> power_output_spread
+power_output_spread[order(as.numeric(power_output_spread$mfc)),] -> power_output_spread
+cbind(rsm_cols,power_output_spread[,-1])->power_output_rsm
+
+# Create blank matrix to fill in with p values
+all_p_values <- as.data.frame(matrix(NA,ncol(power_output_rsm)-4,7))
+packages(broom) 
+
+# Start loop
+for(i in 5:ncol(power_output_rsm)){
+model <- rsm(power_output_rsm[,i] ~ SO(temp, acetate), data = power_output_rsm)
+all_p_values[i-4,] <- c(colnames(power_output_rsm)[i],as.numeric(tidy(model)$p.value)) # get coefficient table as a data frame https://stackoverflow.com/questions/31570440/extract-regression-p-value-in-r
+}
+#End Loop
+
+# Append column names
+colnames(all_p_values) <- c("Time",tidy(model)$term)
+all_p_values
+
+# Turn character into numbers
+all_p_values[,2:7] <- as.numeric(unlist(all_p_values[,2:7]))
+
+#Reshape
+packages(reshape2)
+all_p_values <- melt(all_p_values)
+
+# Plot
+ggplot(data=all_p_values, aes(Time,value, group=variable)) + 
+  geom_line(aes(color=variable))+
+  geom_point(aes(color=variable))+
+  xlab("Cycle 5 time point")+
+  ylab("p value")+
+  geom_hline(yintercept = .05)
+
+#What about cycle 5? Power output in joules was not significant.
+rsm(power_output_rsm[,"5"] ~ SO(temp, acetate), data = power_output_rsm) %>% tidy()
+#fit cumulative power to response surface
+power_output_rsm$cumulative <- rowSums(power_output_rsm[,5:9])
+rsm <- rsm(power_output_rsm[,"cumulative"] ~ SO(temp, acetate), data = power_output_rsm)
+summary(rsm)
+persp(rsm, ~ temp + acetate, col = rainbow(50), contours = "colors")
+```
+Note that temperature has a highly significant effect on cumulative power output across all cycles.
+
+Next let's try transforming the power output data and seeing if results differ.
+```{r}
+# #visualize
+# hist(power_output$energy_J)
+# packages(ggpubr)
+# ggqqplot(power_output$energy_J)
+# shapiro.test(power_output$energy_J) # if p<.05, reject null hypothesis that data is normal, there is evidence data not normal
+# #preprocess
+# packages(caret)
+# packages(e1071)
+# trans = preProcess(data.frame(power_output[,"energy_J"]), c("BoxCox", "center", "scale"))
+# power_trans = data.frame(trans = predict(trans, data.frame(power_output[,"energy_J"])))
+# # Visualize again
+# hist(unlist(power_trans))
+# ggqqplot(unlist(power_trans))
+# shapiro.test(unlist(power_trans))
+# # Attach transformed variables to data set
+# colnames(power_trans) <- "energy_J"
+# power_output <- cbind(power_output[,-ncol(power_output)],power_trans)
+```
+Redo analysis with transformed variables
+```{r}
+# #analysis
+# power_output %>% lm(energy_J~cycle*mfc,.) %>% anova()
+# #cycle seems highly signficant
+# power_output %>% lm(energy_J~cycle,.) %>% anova()
+# summary(aov(energy_J~as.factor(cycle),data=power_output))
+# TukeyHSD(aov(energy_J~as.factor(cycle),data=power_output))
+# #mfc doesn't have a significant effect on power output
+# plot(power_output$mfc,power_output$energy_J)
+# summary(aov(energy_J~mfc,data=power_output))
+# #fit power output for each cycle to response surface
+# power_output %>% spread(.,cycle,energy_J) -> power_output_spread
+# power_output_spread[order(as.numeric(power_output_spread$mfc)),] -> power_output_spread
+# cbind(rsm_cols,power_output_spread[,-1])->power_output_rsm
+# 
+# # Create blank matrix to fill in with p values
+# all_p_values <- as.data.frame(matrix(NA,ncol(power_output_rsm)-4,7))
+# packages(broom) 
+# 
+# # Start loop
+# for(i in 5:ncol(power_output_rsm)){
+# model <- rsm(power_output_rsm[,i] ~ SO(temp, acetate), data = power_output_rsm)
+# all_p_values[i-4,] <- c(colnames(power_output_rsm)[i],as.numeric(tidy(model)$p.value)) # get coefficient table as a data frame https://stackoverflow.com/questions/31570440/extract-regression-p-value-in-r
+# }
+# #End Loop
+# 
+# # Append column names
+# colnames(all_p_values) <- c("Time",tidy(model)$term)
+# all_p_values
+# 
+# # Turn character into numbers
+# all_p_values[,2:7] <- as.numeric(unlist(all_p_values[,2:7]))
+# 
+# #Reshape
+# packages(reshape2)
+# all_p_values <- melt(all_p_values)
+# 
+# # Plot
+# ggplot(data=all_p_values, aes(Time,value, group=variable)) + 
+#   geom_line(aes(color=variable))+
+#   geom_point(aes(color=variable))+
+#   xlab("Cycle 5 time point")+
+#   ylab("p value")+
+#   geom_hline(yintercept = .05)
+# 
+# #What about cycle 5? Power output in joules was not significant.
+# rsm(power_output_rsm[,"5"] ~ SO(temp, acetate), data = power_output_rsm) %>% summary()
+# #fit cumulative power to response surface
+# power_output_rsm$cumulative <- rowSums(power_output_rsm[,5:9])
+# rsm <- rsm(power_output_rsm[,"cumulative"] ~ SO(temp, acetate), data = power_output_rsm)
+# summary(rsm)
+# persp(rsm, ~ temp + acetate, col = rainbow(50), contours = "colors")
+```
+Essentially the same results whether energy in J is transformed or not. 
+
+Next let's work on coulombic efficiency calculation and analysis.
+```{r calculate coulombic efficiency}
+#desired output: long format table "ce_long" with columns cycle, mfc, ce
+#inputs: COD reduction, current = voltage/resistance
+voltage_melt %>% mutate(current_A=voltage/resistance) %>% select(everything(),-voltage) -> current_melt
+current_output <- ddply(current_melt, .(cycle, mfc), summarize, charge_C = trapz(as.numeric(dateTime),current_A))
+#using dplyr
+  # current_melt %>% group_by(cycle,mfc) %>% select(dateTime,current_A) %>% summarise_each(funs(charge_C=trapz(as.numeric(dateTime),current_A)))
+
+current_output$mfc <- as.numeric(current_output$mfc)
+current_output[with(current_output, order(current_output$cycle,current_output$mfc)),] %>% select(mfc,everything()) -> current_output
+#calc CE = (M*Idt)/(F*b*van*COD_Reduction_gL)
+M=	32
+F=	96485.33289
+b=	4
+van=	0.03
+mgL_gL= .001
+current_output %>% mutate(ce = (M*charge_C)/(F*b*van*cod$delta_cod_mg_L*mgL_gL)) -> current_output
+
+```
+
+```{r analyze CE}
+#visualize
+hist(current_output$ce)
+packages(ggpubr)
+ggqqplot(current_output$ce)
+shapiro.test(current_output$ce) # if p<.05, reject null hypothesis that data is normal, there is evidence data not normal
+#preprocess
+packages(caret)
+packages(e1071)
+trans = preProcess(data.frame(current_output[,"ce"]), c("BoxCox", "center", "scale"))
+ce_trans = data.frame(trans = predict(trans, data.frame(current_output[,"ce"])))
+# Visualize again
+hist(unlist(ce_trans))
+ggqqplot(unlist(ce_trans))
+shapiro.test(unlist(ce_trans))
+# Attach transformed variables to data set
+colnames(ce_trans) <- "ce_trans"
+current_output <- cbind(current_output,ce_trans)
+
+
+#fit data for each cycle to response surface
+current_output -> data
+data %>% select(mfc,cycle,ce_trans) %>% spread(.,cycle,ce_trans) -> data_spread
+data_spread[order(as.numeric(data_spread$mfc)),] -> data_spread
+cbind(rsm_cols,power_output_spread[,-1]) -> data_rsm
+
+# Create blank matrix to fill in with p values
+all_p_values <- as.data.frame(matrix(NA,ncol(data_rsm)-4,7))
+packages(broom) 
+
+# Start loop
+for(i in 5:ncol(data_rsm)){
+model <- rsm(data_rsm[,i] ~ SO(temp, acetate), data = data_rsm)
+all_p_values[i-4,] <- c(colnames(data_rsm)[i],as.numeric(tidy(model)$p.value)) # get coefficient table as a data frame https://stackoverflow.com/questions/31570440/extract-regression-p-value-in-r
+}
+#End Loop
+
+# Append column names
+colnames(all_p_values) <- c("cycle",tidy(model)$term)
+
+# Turn character into numbers
+all_p_values[,2:7] <- as.numeric(unlist(all_p_values[,2:7]))
+
+#Reshape
+packages(reshape2)
+all_p_values <- melt(all_p_values)
+
+# Plot
+ggplot(data=all_p_values, aes(cycle,value, group=variable)) + 
+  geom_line(aes(color=variable))+
+  geom_point(aes(color=variable))+
+  xlab("Cycle")+
+  ylab("p value")+
+  geom_hline(yintercept = .05)
+```
+Why aren't the p values the same for Cycle 5?
+
+Let's try analyzing charge_C as well.
+```{r}
+
+
 ```
 
