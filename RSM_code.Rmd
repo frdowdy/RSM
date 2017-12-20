@@ -38,6 +38,8 @@ Install function for needed packages
   packages(rsm)
   packages(tidyverse)
   packages(pracma)
+  packages(caret)
+  packages(e1071)
 ```
 
 
@@ -728,5 +730,65 @@ Let's try analyzing charge_C as well.
 ```{r}
 
 
+```
+
+IVIS Image data
+```{r get IVIS data}
+read_tsv('./IVIS/ivis_measurements.txt') -> ivis
+ivis[ivis==""] <- NA #Convert blank values to NA
+ivis[ivis=="N/A"] <- NA
+ivis %>% select(which(colMeans(is.na(.)) < 0.5)) -> ivis #select columns with less than 50% NA
+colnames(ivis) %>% str_replace_all(" ","_") -> colnames(ivis)
+```
+
+```{r put in channels for easy spreading}
+ivis %>% mutate(Channel = ifelse(EM_Filter==540,"SG","PI")) %>%  mutate(Side=unlist(str_extract_all(Comment1,"[a-z]"))) %>% 
+  mutate(mfc=unlist(str_extract_all(Comment1,"[0-9]{1,2}"))) %>% 
+  select(mfc,Side,Channel,`Total_Radiant_Efficiency_[p/s]_/_[uW/cm2]`) %>% spread(Channel,`Total_Radiant_Efficiency_[p/s]_/_[uW/cm2]`) -> data
+#How much do front and back readings differ for the same MFC? When blocking by MFC, back fluorescence always higher!
+anova(lm(PI~Side+mfc,data))
+anova(lm(SG~Side+mfc,data)) 
+  
+  # summarize by finding mean of front and back
+  ivis %>% mutate(Channel = ifelse(EM_Filter==540,"SG","PI")) %>%  mutate(Side=unlist(str_extract_all(Comment1,"[a-z]"))) %>% 
+  mutate(mfc=unlist(str_extract_all(Comment1,"[0-9]{1,2}"))) %>% 
+  select(mfc,Side,Channel,`Total_Radiant_Efficiency_[p/s]_/_[uW/cm2]`) %>% spread(Channel,`Total_Radiant_Efficiency_[p/s]_/_[uW/cm2]`) %>%         group_by(mfc) %>% summarise_each(funs(mean)) %>% select(-Side) %>% mutate("live/dead"=(SG-PI)/PI) %>% mutate_each(funs(as.numeric(.))) %>% arrange(mfc) -> ivis_data
+```
+Now let's see if we can fit our fluorescence data to our response surface. Note that increasing temperatures decrease SG, PI, and the live/dead ratio. Additionally acetate^2 has a significant effect on SG and PI signals across the mfcs.
+```{r fluorescent data analysis}
+data <- ivis_data
+
+
+# #visualize
+# data %>% select(-1) %>% apply(.,2,hist) 
+# data %>% select(-1) %>% apply(.,2,ggqqplot)
+# data %>% select(-1) %>% apply(.,2,shapiro.test)
+# shapiro.test(current_output$ce) # if p<.05, reject null hypothesis that data is normal, there is evidence data not normal
+#preprocess
+trans = preProcess(data.frame(data %>% select(-1)), c("BoxCox", "center", "scale"))
+data_trans = data.frame(trans = predict(trans, data.frame(data %>% select(-1))))
+# # Visualize again
+# data_trans %>% apply(.,2,hist) 
+# data_trans %>% apply(.,2,ggqqplot)
+# data_trans %>% apply(.,2,shapiro.test)
+
+
+
+# Attach transformed variables to data set
+rsm_hist <- cbind(rsm_hist,data_trans)
+
+
+#fit data to response surface
+rsm <- rsm(rsm_hist$trans.PI ~ SO(temp, acetate), data = rsm_hist)
+summary(rsm)
+persp(rsm, ~ temp + acetate, col = rainbow(50), contours = "colors")
+
+rsm <- rsm(rsm_hist$trans.SG ~ SO(temp, acetate), data = rsm_hist)
+summary(rsm)
+persp(rsm, ~ temp + acetate, col = rainbow(50), contours = "colors")
+
+rsm <- rsm(rsm_hist$trans.live.dead ~ SO(temp, acetate), data = rsm_hist)
+summary(rsm)
+persp(rsm, ~ temp + acetate, col = rainbow(50), contours = "colors")
 ```
 
