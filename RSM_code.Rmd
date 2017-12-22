@@ -204,7 +204,8 @@ ggplot(data=all_p_values, aes(Time,value, group=variable)) +
 ```
 What happens if we do an RSM with the most recent data?
 ```{r RSM voltage_cycle_5 recent}
-rsm5 <- rsm(cycle_5_rsm[,ncol(cycle_5_rsm)-3] ~ SO(temp, acetate), data = cycle_5_rsm)
+rsm5 <- rsm(cycle_5_rsm[,ncol(cycle_5_rsm)-3]~SO(temp,acetate), data = cycle_5_rsm)
+cycle_5_significant <- cycle_5_data[,"43003.56"] 
 summary(rsm5)
 persp(rsm5, ~ temp + acetate, col = rainbow(50), contours = "colors")
 contour(rsm5, ~ temp + acetate, col = rainbow(50), contours = "colors")
@@ -225,7 +226,7 @@ myData[,5:ncol(myData)] <- myData[,5:ncol(myData)]^2/resistance #voltage squared
 
 # RSM
 rsm5 <- rsm(myData[,ncol(myData)-3] ~ SO(temp, acetate), data = myData)
-summary(rsm5) # throws an error here
+# summary(rsm5) # throws an error here
 # persp(rsm5, ~ temp + acetate, col = rainbow(50), contours = "colors")
 # contour(rsm5, ~ temp + acetate, col = rainbow(50), contours = "colors")
 # 
@@ -306,7 +307,7 @@ Does Cycle 5 COD reduction percent fit to our response surface? It doesn't seem 
 ```{r}
 # get cycle 5 cod data
 rsm_cols <- data[,-c(5:ncol(data))]
-
+rsm_cols$type <- gsub("valdiation","validation",rsm_cols$type)
 cycle_5_rsm <- cbind(rsm_cols,cod$reduction_percent[cod$cycle %in% 5])
 colnames(cycle_5_rsm)[5] <- "cod_reduction_percent"
 
@@ -723,13 +724,32 @@ ggplot(data=all_p_values, aes(cycle,value, group=variable)) +
   xlab("Cycle")+
   ylab("p value")+
   geom_hline(yintercept = .05)
+
 ```
-Why aren't the p values the same for Cycle 5?
-
-Let's try analyzing charge_C as well.
+Let's try analyzing charge_C as well. Doesn't fit well to our response surface.
 ```{r}
+current_output %>% filter(cycle==5) %>% select(mfc,charge_C) -> data 
+
+trans = preProcess(data.frame(data %>% select(-1)), c("BoxCox", "center", "scale"))
+data_trans = data.frame(trans = predict(trans, data.frame(data %>% select(-1))))
+colnames(data_trans) <- paste("trans_",colnames(data_trans),sep = "")
+# # Visualize again
+# data_trans %>% apply(.,2,hist) 
+# data_trans %>% apply(.,2,ggqqplot)
+# data_trans %>% apply(.,2,shapiro.test)
 
 
+
+# Attach transformed variables to data set
+rsm_hist <- rsm_cols
+rsm_hist <- cbind(rsm_hist,data_trans)
+
+
+#fit data to response surface
+
+rsm <- rsm(rsm_hist$trans_charge_C ~ SO(temp, acetate), data = rsm_hist)
+summary(rsm)
+persp(rsm, ~ temp + acetate, col = rainbow(50), contours = "colors")
 ```
 
 IVIS Image data
@@ -742,6 +762,8 @@ colnames(ivis) %>% str_replace_all(" ","_") -> colnames(ivis)
 ```
 
 ```{r put in channels for easy spreading}
+# From JaeB Kim: In terms of the fluorescence unit, we recommend “Total Radiant Efficiency” than Avg Radiant Efficiency. Avg radiant efficiency considers pixel number in the calculation. Sometimes depending on how you draw ROI’s, the measurements may get affected. Total radiant efficiency is simply the sum of the signals in the ROI. That usually works in most cases including yours.
+
 ivis %>% mutate(Channel = ifelse(EM_Filter==540,"SG","PI")) %>%  mutate(Side=unlist(str_extract_all(Comment1,"[a-z]"))) %>% 
   mutate(mfc=unlist(str_extract_all(Comment1,"[0-9]{1,2}"))) %>% 
   select(mfc,Side,Channel,`Total_Radiant_Efficiency_[p/s]_/_[uW/cm2]`) %>% spread(Channel,`Total_Radiant_Efficiency_[p/s]_/_[uW/cm2]`) -> data
@@ -775,10 +797,12 @@ data_trans = data.frame(trans = predict(trans, data.frame(data %>% select(-1))))
 
 
 # Attach transformed variables to data set
+
 rsm_hist <- cbind(rsm_hist,data_trans)
 
 
 #fit data to response surface
+
 rsm <- rsm(rsm_hist$trans.PI ~ SO(temp, acetate), data = rsm_hist)
 summary(rsm)
 persp(rsm, ~ temp + acetate, col = rainbow(50), contours = "colors")
@@ -791,4 +815,109 @@ rsm <- rsm(rsm_hist$trans.live.dead ~ SO(temp, acetate), data = rsm_hist)
 summary(rsm)
 persp(rsm, ~ temp + acetate, col = rainbow(50), contours = "colors")
 ```
+Next, let's do multivariate analysis on all the dependent variables in rsm_hist and see if any are significantly correlated.
+```{r}
+rsm_hist
+names(rsm_hist)[names(rsm_hist) == 'run'] <- 'mfc'
+#Get delta COD
+cod$mfc <- as.numeric(cod$mfc)
+cod %>% filter(cycle==5) %>% select(mfc,delta_cod_mg_L,delta_cod_mg_L_day) %>% full_join(rsm_hist,.) -> rsm_hist
+#Voltage
+cycle_5_data[,"43003.56"] %>% cbind(gsub("X","",rownames(cycle_5_data,.))) %>% as_tibble() -> voltage
+colnames(voltage) <- c("voltage","mfc")
+voltage %>% mutate_all(as.numeric) %>% full_join(rsm_hist,.) -> rsm_hist
+#Energy production
+names(power_output_rsm)[names(power_output_rsm) == 'run'] <- 'mfc'
+names(power_output_rsm)[names(power_output_rsm) == '5'] <- 'cycle_5_energy_J'
+names(power_output_rsm)[names(power_output_rsm) == 'cumulative'] <- 'cumulative_energy_J'
+power_output_rsm %>% select(mfc,cycle_5_energy_J,cumulative_energy_J) %>% full_join(rsm_hist,.) -> rsm_hist
+#CE
+current_output %>% filter(cycle==5) %>% arrange(mfc) %>% select(mfc,ce_trans) %>% full_join(rsm_hist,.) -> rsm_hist
+names(rsm_hist)[names(rsm_hist) == 'ce_trans'] <- 'trans_ce'
+#transform any untransformed
+colnames(rsm_hist) <- str_replace_all(colnames(rsm_hist),"[.]","_")
+rsm_hist %>% as_tibble() %>% select(-c(type,temp,acetate)) %>% select(-starts_with("trans")) -> data
+  
+trans = preProcess(data.frame(data %>% select(-1)), c("BoxCox", "center", "scale"))
+data_trans = data.frame(trans = predict(trans, data.frame(data %>% select(-1))))
+# Attach transformed variables to data set
+rsm_hist <- cbind(rsm_hist,data_trans)
+colnames(rsm_hist) <- str_replace_all(colnames(rsm_hist),"[.]","_")
+rsm_hist %>% as_tibble() %>% select(-c(mfc,type,temp,acetate)) %>% select(starts_with("trans")) -> rsm_hist_trans
+```
+Now that we've got the data let's do multivariate analysis.
+Note the p matrix isn't symmetric for corr.test(...,adjust="BH")
+```{r}
+# https://cran.r-project.org/web/packages/corrplot/vignettes/corrplot-intro.html
+packages(psych)
+corr.test(rsm_hist_trans,adjust = "none") -> trans_corr
+#non-adjusted p value matrix is symmetric, BH is not
+p.adjust(trans_corr$p,method = "BH") %>% matrix(.,nrow = nrow(trans_corr$r),ncol = ncol(trans_corr$r)) -> trans_corr$p
+packages(corrplot)
+packages(RColorBrewer)
+corrplot(trans_corr$r, type = "lower", order = "hclust", p.mat = trans_corr$p, sig.level = 0.05, insig = "blank")
 
+#make diagonal excluded
+diag(trans_corr$p) <- 1
+corrplot(trans_corr$r, type = "full", method = "ellipse",order = "hclust", p.mat = trans_corr$p, sig.level = 0.05, insig = "blank",tl.col = "black")
+```
+Let's check and make sure we get the same BH values in JMP. Slightly different, but the same number of significant values.
+```{r}
+# lower.tri(trans_corr$p)*trans_corr$p -> data
+# as.vector(data) -> data
+# data <- data[data != 0]
+# data[order(data)]->data
+# data[data<=0.05]
+```
+
+What happens if we only select the center point replicates? Do we get better correlation? No.
+```{r}
+# rsm_hist %>% filter(type=="center") %>% select(starts_with("trans")) ->rsm_center_hist_trans
+# 
+# 
+# corr.test(rsm_center_hist_trans,adjust = "none") -> trans_corr
+# #non-adjusted p value matrix is symmetric, BH is not
+# p.adjust(trans_corr$p,method = "BH") %>% matrix(.,nrow = nrow(trans_corr$r),ncol = ncol(trans_corr$r)) -> trans_corr$p
+# packages(corrplot)
+# packages(RColorBrewer)
+# corrplot(trans_corr$r, type = "lower", order = "hclust", p.mat = trans_corr$p, sig.level = 0.05, insig = "blank")
+# 
+# #make diagonal excluded
+# diag(trans_corr$p) <- 1
+# corrplot(trans_corr$r, type = "full", method = "ellipse",order = "hclust", p.mat = trans_corr$p, sig.level = 0.05, insig = "blank",tl.col = "black")
+```
+
+What if we do PCA/LDA? Not getting significant Wilks Lambda, so the results aren't clustering too well based on type, temp, or acetate.
+```{r}
+# rsm_hist %>% select(mfc,type,temp,acetate,starts_with("trans")) -> data # doesn't look too promising in JMP
+# 
+# # Wilks Lambda
+# dep.vars <- cbind(data %>% select(-mfc,-type,-temp,-acetate))
+# manova_fit <- manova(as.matrix(dep.vars) ~ data$type)
+# summary(manova_fit, test="Wilks",tol = 0)
+# manova_fit <- manova(as.matrix(dep.vars) ~ as.factor(data$temp))
+# summary(manova_fit, test="Wilks",tol = 0)
+# manova_fit <- manova(as.matrix(dep.vars) ~ as.factor(data$acetate))
+# summary(manova_fit, test="Wilks",tol = 0)
+```
+Now let's go back and see if we missed anything in our response surfaces. Let's fit all the transformed variables to temp and acetate, with and without the validation points.
+```{r}
+# https://stackoverflow.com/questions/22713325/fitting-several-regression-models-with-dplyr
+rsm_hist %>% select(mfc,type,temp,acetate,starts_with("trans"))  %>% gather("variable","value",c(5:ncol(.))) %>% group_by(variable) %>% do(fitVariable = rsm(value ~ SO(temp, acetate), data = .)) -> dfVariable
+
+# get the coefficients by group in a tidy data_frame
+dfVariableCoef = tidy(dfVariable, fitVariable)
+dfVariableCoef
+dfVariableCoef %>% filter(p.value<=.05,term != "(Intercept)")
+
+# get the predictions by group in a tidy data_frame - doesn't work
+# dfVariablePred = augment(dfVariable,fitVariable)
+# dfVariablePred
+
+# get the summary statistics by group in a tidy data_frame
+dfVariableSumm = glance(dfVariable, fitVariable)
+dfVariableSumm
+```
+I'm getting the same significant RSM terms in JMP, which is good.
+
+It may be worth coming back to this type of analysis (RSM and multivariate) after getting the sequencing data in - like Shannon's index of bristles, RA of different otu's, etc.
