@@ -917,6 +917,7 @@ dfVariableCoef %>% filter(p.value<=.05,term != "(Intercept)")
 # get the summary statistics by group in a tidy data_frame
 dfVariableSumm = glance(dfVariable, fitVariable)
 dfVariableSumm
+
 ```
 I'm getting the same significant RSM terms in JMP, which is good.
 
