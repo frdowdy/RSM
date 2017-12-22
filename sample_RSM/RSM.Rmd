@@ -1,0 +1,42 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Clear RStudio
+```{r}
+
+  # cat(rep("\n",50)) # Clear Console
+  rm(list=ls(all=TRUE)) # clear workspace
+  graphics.off() # closes all graphics
+  # setwd("C:/Users/Ryan/Google Drive/UC Davis/Publications/MFC Microbiome Paper - Experiment 15") # sets working directory
+```
+
+Install function for needed packages
+```{r, message = FALSE, warning=FALSE}
+   
+  packages<-function(x){
+    x<-as.character(match.call()[[2]])
+    if (!require(x,character.only=TRUE)){
+      install.packages(pkgs=x,repos="http://cran.r-project.org")
+      require(x,character.only=TRUE)
+    }
+  }
+  packages(rsm)
+```
+
+
+
+
+```{r}
+# https://cran.r-project.org/web/packages/rsm/vignettes/rsm.pdf
+ChemReact
+CR1 <- coded.data(ChemReact, x1 ~ (Time - 85)/5, x2 ~ (Temp - 175)/5)
+setwd("C:/Users/Ryan/Google Drive/R")
+CR1[1:7,]
+as.data.frame(CR1)
+
+write.csv(ChemReact,"chemreact.csv")
+write.csv(CR1,"chemreact1.csv")
+```
+

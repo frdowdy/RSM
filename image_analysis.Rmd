@@ -1,0 +1,169 @@
+---
+title: "Image Analysis"
+output: html_notebook
+---
+```{r}
+# Clear RStudio ---------------------------------------------------------
+rm(list=ls(all=TRUE)) # clear workspace
+graphics.off() # closes all graphics
+
+```
+
+```{r packages function}
+packages<-function(x){
+  x<-as.character(match.call()[[2]])
+  if (!require(x,character.only=TRUE)){
+    install.packages(pkgs=x,repos="http://cran.r-project.org")
+    require(x,character.only=TRUE)
+  }
+}
+```
+
+
+```{r get data}
+data <- read.csv("fluorescence.csv",header=TRUE)
+data
+```
+
+
+
+```{r}
+# Preprocessing
+# Visualize original data
+packages(reshape)
+packages(ggplot2)
+multiplehist <- melt(data[,c(2:ncol(data))])
+ggplot(multiplehist,aes(x = value)) + 
+    facet_wrap(~variable,scales = "free") + 
+    geom_histogram(col="black", 
+                 fill="grey")
+# Transformation
+packages(caret)
+packages(e1071)
+trans = preProcess(data[,c(2:ncol(data))],c("YeoJohnson", "center", "scale"))
+kos_trans = data.frame(trans = predict(trans, data))
+kos_trans
+# Visualize again
+multiplehist <- melt(kos_trans)
+ggplot(multiplehist,aes(x = value)) + 
+    facet_wrap(~variable,scales = "free") + 
+    geom_histogram(col="black", 
+                 fill="grey")
+
+```
+
+```{r}
+# Build model for original data
+  dep.vars <- cbind(data[,c(2:ncol(data))])
+  manova_fit <- manova(as.matrix(dep.vars) ~ data$Sample)
+  summary(manova_fit, test="Wilks")
+  cat("\n")
+  summary(aov(as.matrix(dep.vars) ~ data$Sample))
+  
+  #LDA
+  packages(MASS)
+  lda <- lda(formula = Sample ~ ., 
+           data = data
+           )
+  
+  #Ordinal plot
+  packages(devtools)
+  packages(ggord)
+  
+  ord <- lda
+  
+  p <- ggord(ord, data$Sample)
+  p #Note: needs to be cleaned up. Legend is messed up: shows two groupings.
+
+
+
+```
+```{r}
+# Build model for transformed data
+dep.vars <- cbind(kos_trans[,c(2:ncol(kos_trans))])
+manova_fit <- manova(as.matrix(dep.vars) ~ kos_trans$trans.Sample)
+summary(manova_fit, test="Wilks")
+cat("\n")
+summary(aov(as.matrix(dep.vars) ~ kos_trans$trans.Sample))
+#LDA
+  packages(MASS)
+  lda <- lda(formula = trans.Sample ~ ., 
+           data = kos_trans
+           )
+  
+  #Ordinal plot
+  packages(devtools)
+  packages(ggord)
+  
+  ord <- lda
+  
+  p <- ggord(ord, kos_trans$trans.Sample)
+  p #Note: needs to be cleaned up. Legend is messed up: shows two groupings.
+
+```
+This data looks decent. But how do we know we are getting representative samples of our biofilm? Let's check out EBImage (https://www.r-bloggers.com/r-image-analysis-using-ebimage/)
+```{r EBImage}
+# source("http://bioconductor.org/biocLite.R")
+# biocLite()
+# biocLite("EBImage")
+require(EBImage)
+```
+
+```{r load image}
+img <- readImage("Z-Stack GFP 15.tif")*2^16
+
+display(normalize(img),method="raster",all=TRUE)
+
+
+color_img <- rgbImage(green=img)
+display(normalize(color_img),all=TRUE,metho="raster")
+```
+Great, so we can see our image. Can we measure integrated density like in ImageJ?
+```{r img analysis}
+img
+dim(img)
+hist(img)
+range(img)
+
+mean(img) # Mean pixel intensity
+sd(img)
+sum(img) # Integrated density
+```
+Here comes the real question. How many times do we have to sample a section of this biofilm to get an accurate picture of the mean/integrated density?
+```{r}
+#https://stackoverflow.com/questions/24299171/function-to-split-a-matrix-into-sub-matrices-in-r
+matsplitter<-function(M, r, c) {
+    rg <- (row(M)-1)%/%r+1
+    cg <- (col(M)-1)%/%c+1
+    rci <- (rg-1)*max(cg) + cg
+    N <- prod(dim(M))/r/c
+    cv <- unlist(lapply(1:N, function(x) M[rci==x]))
+    dim(cv)<-c(r,c,N)
+    cv
+} 
+
+split_img <- matsplitter(img,nrow(img)/10,ncol(img)/10) #Split the img into 100 sub-images
+str(split_img)
+```
+Now that we've split our image into sub-images, can we get the mean of each sub-image and plot it?
+```{r}
+mean(split_img[,,1]) # get mean of first sub-image
+subimagemean <- apply(split_img,3,mean) # get mean of all sub-images, averaging over 1st and 2nd dimensions
+hist(subimagemean) #put it in a histogram
+ggplot() + aes(subimagemean)+ geom_histogram(binwidth=200, colour="black", fill="white") #use ggplot
+```
+How well does our sampling compare to the true mean? And how many times do we have to subsample to get an accurate reading of the true mean?
+```{r}
+ggplot() + 
+  aes(subimagemean)+ 
+  geom_histogram(binwidth=200, colour="black", fill="white")+
+  geom_vline(aes(xintercept=mean(img)),
+            color="blue", linetype="dashed", size=1)
+# Note that mean(img)=mean(subimagemean), following the central limit theorem.
+# What is the variance of our sampling distribution?
+var(subimagemean) # variance of sampling distribution
+sd(img)^2 # variance of original img
+sd(img)^2/var(subimagemean)   # show central limit theorem
+```
+
+

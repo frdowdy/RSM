@@ -1,0 +1,390 @@
+---
+title: "RSM_code"
+output:
+  html_document: default
+  html_notebook: default
+---
+
+First we're going to set up R to to our target directory and clear the workspace.
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE, 
+                      message = FALSE,
+                      engine = "R", # Chunks will always have R code, unless noted
+                      error = TRUE,
+                      fig.path="Figures/",  # Set the figure options
+                      fig.align = "center",
+                      dev='png')
+
+```
+
+Clear RStudio
+```{r clear}
+  # cat(rep("\n",50)) # Clear Console
+  rm(list=ls(all=TRUE)) # clear workspace
+  graphics.off() # closes all graphics
+```
+
+Install function for needed packages
+```{r packages function, message = FALSE, warning=FALSE}
+   
+  packages<-function(x){
+    x<-as.character(match.call()[[2]])
+    if (!require(x,character.only=TRUE)){
+      install.packages(pkgs=x,repos="http://cran.r-project.org")
+      require(x,character.only=TRUE)
+    }
+  }
+  packages(rsm)
+```
+
+
+```{r get data, message = FALSE, warning=FALSE}
+# https://cran.r-project.org/web/packages/rsm/vignettes/rsm.pdf
+packages(XLConnect)
+data <- readWorksheetFromFile("preliminary_RSM.xlsx",sheet=1)
+
+# Withhold validation points from dataset
+data_training <- data[1:13,]
+```
+
+Let's try it with our previous data set:
+```{r generate RSM model for cycle 4}
+rsm4 <- rsm(voltage_cycle_4 ~ SO(temp, acetate), data = data_training)
+summary(rsm4)
+```
+Let's try visualizing these results.
+```{r voltage_cycle_4}
+persp(rsm4, ~ temp + acetate, col = rainbow(50), contours = "colors")
+contour(rsm4, ~ temp + acetate, col = rainbow(50), contours = "colors")
+
+
+packages(ggplot2)
+packages(ggthemes)
+packages(cowplot)
+plot_acetate <- ggplot(data_training, aes(acetate, voltage_cycle_4)) + geom_point() + theme_few()
+plot_temp <- ggplot(data_training, aes(temp, voltage_cycle_4)) + geom_point() + theme_few() 
+plot_grid(plot_acetate, plot_temp, align='h', labels=c('a', 'b'))
+```
+Note that we could also plot this with other packages using plot.it=false
+Now let's try this with our most recent data set.
+```{r voltage_cycle_5}
+rsm5 <- rsm(voltage_cycle_5 ~ SO(temp, acetate), data = data_training)
+summary(rsm5)
+persp(rsm5, ~ temp + acetate, col = rainbow(50), contours = "colors")
+contour(rsm5, ~ temp + acetate, col = rainbow(50), contours = "colors")
+
+#Look at slices against each factor
+plot_acetate <- ggplot(data_training, aes(acetate, voltage_cycle_5)) + geom_point() + theme_few()
+plot_temp <- ggplot(data_training, aes(temp, voltage_cycle_5)) + geom_point() + theme_few() 
+plot_grid(plot_acetate, plot_temp, align='h', labels=c('a', 'b'))
+
+```
+Is there a better point in time to analyze this data? Let's run this against multiple time points and find which creates the best model.
+```{r apply p value to multiple cycles}
+all_p_values <- as.data.frame(matrix(NA,ncol(data_training)-4,7))
+
+packages(broom) 
+
+
+# Start loop
+for(i in 5:ncol(data_training)){
+model <- rsm(data_training[,i] ~ SO(temp, acetate), data = data_training)
+all_p_values[i-4,] <- c(colnames(data_training)[i],as.numeric(tidy(model)$p.value)) # get coefficient table as a data frame https://stackoverflow.com/questions/31570440/extract-regression-p-value-in-r
+}
+#End Loop
+
+# Append column names
+colnames(all_p_values) <- c("Time",tidy(model)$term)
+all_p_values
+
+# Turn character into numbers
+all_p_values[,2:7] <- as.numeric(unlist(all_p_values[,2:7]))
+
+#Reshape
+packages(reshape2)
+all_p_values <- melt(all_p_values)
+
+# Plot
+ggplot(data=all_p_values, aes(Time,value, group=variable)) + 
+  geom_line(aes(color=variable))+
+  geom_point(aes(color=variable))+
+  xlab("Cycle")+
+  ylab("p value")+
+  geom_hline(yintercept = .05)
+  # +   scale_x_date(format = "%b-%Y") + xlab("") + ylab("Daily Views")
+```
+Now let's load in all the cycle 5 data so far.
+```{r all cycle 5 timepoints}
+
+# import data
+cycle_5_data <- as.data.frame(read.csv("cycle_5_data.csv"))
+# get into correct form
+# remove first two columns
+cycle_5_data <- cycle_5_data[,-c(1:2)]
+
+#transpose
+# first remember the names
+n <- cycle_5_data[,1]
+cycle_5_data <- as.data.frame(t(cycle_5_data[,-1]))
+colnames(cycle_5_data) <- n
+cycle_5_data$myfactor <- factor(row.names(cycle_5_data))
+
+
+
+#knit to past data
+cycle_5_rsm <- cbind(data[,c(1:4)],cycle_5_data)
+
+#Take out rows 14 and 15
+cycle_5_rsm <- cycle_5_rsm[-c(14:15),]
+
+# last col seems to contain row names. take out
+cycle_5_rsm <- cycle_5_rsm[,-922]
+
+# Previous code
+# Create blank matrix to fill in with p values
+all_p_values <- as.data.frame(matrix(NA,ncol(cycle_5_rsm)-4,7))
+
+packages(broom) 
+
+
+# Start loop
+for(i in 5:ncol(cycle_5_rsm)){
+model <- rsm(cycle_5_rsm[,i] ~ SO(temp, acetate), data = cycle_5_rsm)
+all_p_values[i-4,] <- c(colnames(cycle_5_rsm)[i],as.numeric(tidy(model)$p.value)) # get coefficient table as a data frame https://stackoverflow.com/questions/31570440/extract-regression-p-value-in-r
+}
+#End Loop
+
+# Append column names
+colnames(all_p_values) <- c("Time",tidy(model)$term)
+all_p_values
+
+# Turn character into numbers
+all_p_values[,2:7] <- as.numeric(unlist(all_p_values[,2:7]))
+
+#Reshape
+packages(reshape2)
+all_p_values <- melt(all_p_values)
+
+# Plot
+ggplot(data=all_p_values, aes(Time,value, group=variable)) + 
+  geom_line(aes(color=variable))+
+  geom_point(aes(color=variable))+
+  xlab("Cycle 5 time point")+
+  ylab("p value")+
+  geom_hline(yintercept = .05)
+
+```
+Wow let's zoom in on that recent time period where a couple of terms become significant.
+```{r recent cycle 5}
+all_p_values$Time <- as.numeric(all_p_values$Time)
+
+ggplot(data=all_p_values, aes(Time,value, group=variable)) + 
+  geom_line(aes(color=variable))+
+  geom_point(aes(color=variable))+
+  xlab("Cycle 5 time point")+
+  ylab("p value")+
+  geom_hline(yintercept = .05)+
+  xlim(43001,NA)
+```
+Wow now let's zoom in even more.
+```{r recent cycle 5 zoom}
+all_p_values$Time <- as.numeric(all_p_values$Time)
+
+ggplot(data=all_p_values, aes(Time,value, group=variable)) + 
+  geom_line(aes(color=variable))+
+  geom_point(aes(color=variable))+
+  xlab("Cycle 5 time point")+
+  ylab("p value")+
+  geom_hline(yintercept = .05)+
+  xlim(43003,NA)
+```
+What happens if we do an RSM with the most recent data?
+```{r RSM voltage_cycle_5 recent}
+rsm5 <- rsm(cycle_5_rsm[,ncol(cycle_5_rsm)-3] ~ SO(temp, acetate), data = cycle_5_rsm)
+summary(rsm5)
+persp(rsm5, ~ temp + acetate, col = rainbow(50), contours = "colors")
+contour(rsm5, ~ temp + acetate, col = rainbow(50), contours = "colors")
+
+#Look at slices against each factor
+plot_acetate <- ggplot(data_training, aes(acetate, voltage_cycle_5)) + geom_point() + theme_few()
+plot_temp <- ggplot(data_training, aes(temp, voltage_cycle_5)) + geom_point() + theme_few() 
+plot_grid(plot_acetate, plot_temp, align='h', labels=c('a', 'b'))
+
+```
+Great let's transform the voltage data to power data given that the external voltage was constant at 1000 ohms.
+```{r}
+# #Power in Watts
+# resistance <- 1000
+# myData <- cycle_5_rsm
+# 
+# myData[,5:ncol(myData)] <- myData[,5:ncol(myData)]^2/resistance #voltage squared divided by resistance
+# 
+# # RSM
+# rsm5 <- rsm(myData[,ncol(myData)-3] ~ SO(temp, acetate), data = myData)
+# summary(rsm5) # throws an error here
+# # persp(rsm5, ~ temp + acetate, col = rainbow(50), contours = "colors")
+# # contour(rsm5, ~ temp + acetate, col = rainbow(50), contours = "colors")
+# # 
+# # #Look at slices against each factor
+# # plot_acetate <- ggplot(data_training, aes(acetate, voltage_cycle_5)) + geom_point() + theme_few()
+# # plot_temp <- ggplot(data_training, aes(temp, voltage_cycle_5)) + geom_point() + theme_few() 
+# # plot_grid(plot_acetate, plot_temp, align='h', labels=c('a', 'b'))
+```
+Let's see if we can import our COD data. Did COD reduction differ significantly between units or across cycles?
+```{r}
+#Import
+packages(readr)
+cod <- read_csv("cod_results.csv",col_types = cols(MFC = "c"))
+cod
+#get in long format. Columns: mfcNumber, cycleNumber, endCOD, CODReductionPercent
+cod <- melt(cod)
+names(cod)[names(cod) == 'variable'] <- 'cycle'
+names(cod)[names(cod) == 'MFC'] <- 'mfc'
+names(cod)[names(cod) == 'value'] <- 'cod_mg_L'
+cod$cod_mg_L <- cod$cod_mg_L*100
+head(cod)
+
+initial_cod <- 42067
+cod$delta_cod_mg_L <- initial_cod-cod$cod_mg_L
+cod$reduction_percent <- cod$delta_cod_mg_L/initial_cod
+
+# plot
+ggplot(data=cod, aes(x = cycle,reduction_percent, group=mfc)) + 
+  geom_line(aes(color=mfc))+
+  geom_point(aes(color=mfc))+
+  xlab("Cycle")+
+  ylab("COD Reduction (%)")
+# run analysis
+write_csv(cod,"cod_output_from_R.csv")
+cod$cycle <- as.numeric(cod$cycle)
+model <- lm(reduction_percent~mfc*cycle,data = cod)
+anova(model)
+
+```
+```{r}
+cod$cycle <- as.factor(cod$cycle)
+# anova on just reduction percent fit to cycle
+# Fit a model using the lm function and look at the parameter estimates and standard errors for the treatment effects
+  # https://www.r-bloggers.com/one-way-analysis-of-variance-anova/
+  model = lm(reduction_percent ~ cycle, data = cod)
+  # We save the model fitted to the data in an object so that we can undertake various actions to study the goodness of the fit to the data and other model assumptions. 
+  # summary(model)
+  # An analysis of variance table for this model can be produced via the anova command
+  anova.model = anova(model)
+  anova.model
+  
+  
+# Alternative method (http://personality-project.org/r/r.guide/r.anova.html)
+  aov_model = aov(reduction_percent ~ cycle, data = cod)  #do the analysis of variance
+  cat("\n")
+  summary(aov_model)                                    #show the summary table
+  cat("\n")
+  print(model.tables(aov_model,"means"),digits=3)       #report the means and the number of subjects/cell
+  
+# Interpret the Omnibus ANOVA Test Results  
+  pvaluecolumn <- anova.model$"Pr(>F)" # Extracts p RA_cluster_in_label column
+  pvalue = pvaluecolumn[1] # Extracts first row from p RA_cluster_in_label column
+  cat("\n")
+  cat("ANOVA p value is",pvalue,"\n") # Displays p value
+  if (pvalue>.05) {
+    writeLines("Results are not significant. Fail to reject null hypothesis.")
+  } else {
+    writeLines("Results are significant. Reject null hypothesis.")
+  }
+
+# Run Post-Hoc Tukey HSD between treatment groups
+  cat("\n")
+ 
+TukeyHSD(aov_model)
+```
+Does Cycle 5 COD reduction percent fit to our response surface? It doesn't seem to.
+```{r}
+# get cycle 5 cod data
+rsm_cols <- data[,-c(5:ncol(data))]
+
+cycle_5_rsm <- cbind(rsm_cols,cod$reduction_percent[cod$cycle %in% 5])
+colnames(cycle_5_rsm)[5] <- "cod_reduction_percent"
+
+#Build model
+cycle_5_rsm_training <- cycle_5_rsm[-c(14:15),]
+rsmModel <- rsm(cod_reduction_percent ~ SO(temp, acetate), data = cycle_5_rsm_training)
+summary(rsmModel)
+persp(rsmModel, ~ temp + acetate, col = rainbow(50), contours = "colors")
+contour(rsmModel, ~ temp + acetate, col = rainbow(50), contours = "colors")
+
+#Look at slices against each factor
+plot_acetate <- ggplot(cycle_5_rsm_training, aes(acetate, cod_reduction_percent)) + geom_point() + theme_few()
+plot_temp <- ggplot(cycle_5_rsm_training, aes(temp, cod_reduction_percent)) + geom_point() + theme_few()
+plot_grid(plot_acetate, plot_temp, align='h', labels=c('a', 'b'))
+```
+Did time periods differ for each cycle? Maybe we should normalize by cod reduction per day, then rerun analysis.
+```{r get cycle times}
+packages(tidyverse)
+packages(lubridate)
+cycleTimes <- read_csv("cycleTimes.csv")
+cycleTimes$start <- mdy(cycleTimes$start)
+cycleTimes$end <- mdy(cycleTimes$end)
+as.tibble(cycleTimes)
+cycleTimes$duration_days <- cycleTimes$end-cycleTimes$start
+cycleTimes
+```
+
+```{r analyze with cod reduction normalized to cycle times}
+# plot
+ggplot(data=cod, aes(x = cycle,reduction_percent, group=mfc)) + 
+  geom_line(aes(color=mfc))+
+  geom_point(aes(color=mfc))+
+  xlab("Cycle")+
+  ylab("COD Reduction (%)")
+# run analysis
+write_csv(cod,"cod_output_from_R.csv")
+cod$cycle <- as.numeric(cod$cycle)
+model <- lm(reduction_percent~mfc*cycle,data = cod)
+anova(model)
+
+```
+
+```{r}
+head(cod)
+cod$cycle_duration <- cycleTimes[match(cod$cycle,cycleTimes$cycle),"duration_days"]
+packages(tibbletime)
+as_tbl_time(cod)
+cod$delta_cod_mg_L_day <- cod$delta_cod_mg_L*(cod$cycle_duration)^-1
+# anova on just reduction percent fit to cycle
+# Fit a model using the lm function and look at the parameter estimates and standard errors for the treatment effects
+  # https://www.r-bloggers.com/one-way-analysis-of-variance-anova/
+  model = lm(reduction_percent ~ cycle, data = cod)
+  # We save the model fitted to the data in an object so that we can undertake various actions to study the goodness of the fit to the data and other model assumptions. 
+  # summary(model)
+  # An analysis of variance table for this model can be produced via the anova command
+  anova.model = anova(model)
+  anova.model
+  
+  
+# Alternative method (http://personality-project.org/r/r.guide/r.anova.html)
+  aov_model = aov(reduction_percent ~ cycle, data = cod)  #do the analysis of variance
+  cat("\n")
+  summary(aov_model)                                    #show the summary table
+  cat("\n")
+  print(model.tables(aov_model,"means"),digits=3)       #report the means and the number of subjects/cell
+  
+# Interpret the Omnibus ANOVA Test Results  
+  pvaluecolumn <- anova.model$"Pr(>F)" # Extracts p RA_cluster_in_label column
+  pvalue = pvaluecolumn[1] # Extracts first row from p RA_cluster_in_label column
+  cat("\n")
+  cat("ANOVA p value is",pvalue,"\n") # Displays p value
+  if (pvalue>.05) {
+    writeLines("Results are not significant. Fail to reject null hypothesis.")
+  } else {
+    writeLines("Results are significant. Reject null hypothesis.")
+  }
+
+# Run Post-Hoc Tukey HSD between treatment groups
+  cat("\n")
+ 
+TukeyHSD(aov_model)
+```
+
+Now let's pull in all the voltage data over all times. Then we can integrate to find coulombic efficiency.
+
