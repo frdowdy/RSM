@@ -509,6 +509,7 @@ power_melt <- power_melt[,-ncol(power_melt)]
 power_melt$power_J_s <- voltage_melt$voltage^2/resistance
 power_melt <- as.tibble(power_melt)
 #integrate for power output or energy in Joules
+packages(plyr)
 power_output <- ddply(power_melt, .(cycle, mfc), summarize, energy_J = trapz(as.numeric(dateTime),power_J_s))
 #check it worked
 # it did - checked in excel
@@ -902,6 +903,7 @@ What if we do PCA/LDA? Not getting significant Wilks Lambda, so the results aren
 ```
 Now let's go back and see if we missed anything in our response surfaces. Let's fit all the transformed variables to temp and acetate, with and without the validation points.
 ```{r}
+# with validation points
 # https://stackoverflow.com/questions/22713325/fitting-several-regression-models-with-dplyr
 rsm_hist %>% select(mfc,type,temp,acetate,starts_with("trans"))  %>% gather("variable","value",c(5:ncol(.))) %>% group_by(variable) %>% do(fitVariable = rsm(value ~ SO(temp, acetate), data = .)) -> dfVariable
 
@@ -917,8 +919,92 @@ dfVariableCoef %>% filter(p.value<=.05,term != "(Intercept)")
 # get the summary statistics by group in a tidy data_frame
 dfVariableSumm = glance(dfVariable, fitVariable)
 dfVariableSumm
-
 ```
 I'm getting the same significant RSM terms in JMP, which is good.
+Code runs well so far.
 
+```{r all rsm without validation points}
+# without validation points
+# https://stackoverflow.com/questions/22713325/fitting-several-regression-models-with-dplyr
+rsm_hist %>% select(mfc,type,temp,acetate,starts_with("trans"))  %>% filter(type!="validation") %>% gather("variable","value",c(5:ncol(.))) %>% group_by(variable) %>% do(fitVariable = rsm(value ~ SO(temp, acetate), data = .)) -> dfVariable
+
+# get the coefficients by group in a tidy data_frame
+dfVariableCoef = tidy(dfVariable, fitVariable)
+dfVariableCoef
+dfVariableCoef %>% filter(p.value<=.05,term != "(Intercept)")
+
+# get the predictions by group in a tidy data_frame - doesn't work
+# dfVariablePred = augment(dfVariable,fitVariable)
+# dfVariablePred
+
+# get the summary statistics by group in a tidy data_frame
+dfVariableSumm = glance(dfVariable, fitVariable)
+dfVariableSumm
+
+# get all significant models
+dfVariableCoef %>% filter(p.value<=.05,term != "(Intercept)") %>% select(variable) %>% unique() %>% as.matrix() %>% match(.,dfVariable$variable) -> sig_models
+
+# loop it and provide titles
+for(i in sig_models){
+ dfVariable$fitVariable[i] %>% unlist(recursive = FALSE) %>% structure(class = "lm") %>% 
+  persp(., ~ temp + acetate, col = rainbow(50), contours = "colors")
+  title(main = paste(dfVariable$variable[i],"excluding validation points"))
+}
+```
+Very nice!
 It may be worth coming back to this type of analysis (RSM and multivariate) after getting the sequencing data in - like Shannon's index of bristles, RA of different otu's, etc.
+
+Take out non-significant RSM terms in models, re-visualize (do by turning coefficient estimate into zero? AIC selection?)
+```{r remove non-significant terms}
+# without validation points, rsm package
+rsm_hist %>% dplyr::select(mfc,type,temp,acetate,trans_cumulative_energy_J) %>% filter(type!="validation") -> data
+rsm(trans_cumulative_energy_J ~ SO(temp, acetate), data = data) %>% step()
+
+#regular lm fit - seems to work better with step()
+rsm_hist %>% dplyr::select(mfc,type,temp,acetate,trans_cumulative_energy_J) %>% filter(type!="validation") -> data
+lm(trans_cumulative_energy_J ~ I(temp*2)+I(acetate^2)+temp+acetate+temp*acetate, data = data) %>% step()
+
+# without validation points, filtered for only the significant models, then stepped with AIC
+dfVariableCoef %>% filter(p.value<=.05,term != "(Intercept)") %>% select(variable) %>% unique() %>% as.matrix() -> sig_models_names
+rsm_hist %>% select(mfc,type,temp,acetate,sig_models_names)  %>% filter(type!="validation") %>% gather("variable","value",c(5:ncol(.))) %>% group_by(variable) %>% do(fitVariable = step(lm(value ~ I(temp*2)+I(acetate^2)+temp+acetate+temp*acetate, data = .))) -> dfVariable
+ 
+# get the coefficients by group in a tidy data_frame
+dfVariableCoef = tidy(dfVariable, fitVariable)
+dfVariableCoef
+# dfVariableCoef %>% filter(p.value<=.05,term != "(Intercept)")
+
+# # get the predictions by group in a tidy data_frame - doesn't work
+# # dfVariablePred = augment(dfVariable,fitVariable)
+# # dfVariablePred
+# 
+# get the summary statistics by group in a tidy data_frame
+dfVariableSumm = glance(dfVariable, fitVariable)
+dfVariableSumm
+
+# get all significant models (already selected only significant ones)
+dfVariableCoef %>% select(variable) %>% unique() %>% as.matrix() %>% match(.,dfVariable$variable) -> sig_models
+
+# loop it, visualize, and provide titles - why isn't this working?
+dfVariable$fitVariable[1] %>% unlist(recursive = FALSE) %>% structure(class = "lm") -> model
+  persp(model, ~ temp + acetate, col = rainbow(50), contours = "colors")
+  title(main = paste(dfVariable$variable[i],"excluding validation points"))
+
+
+for(i in sig_models){
+ dfVariable$fitVariable[i] %>% unlist(recursive = FALSE) %>% structure(class = "lm") %>%
+  persp(., ~ temp + acetate, col = rainbow(50), contours = "colors")
+  title(main = paste(dfVariable$variable[i],"excluding validation points"))
+}
+```
+
+
+
+How well do each of these models predict the validation points?
+```{r model validation}
+rsm_hist %>% select(mfc,type,temp,acetate,starts_with("trans"))  %>% filter(type=="validation") -> new.data
+predict(dfVariable$fitVariable[1],newdata = new.data, interval = "confidence") #note this predicts trans_ce using the full rsm for my two validation points
+
+
+```
+
+What are the optimum conditions for each response surface?
