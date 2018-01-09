@@ -943,6 +943,7 @@ dfVariableSumm
 
 # get all significant models
 dfVariableCoef %>% filter(p.value<=.05,term != "(Intercept)") %>% select(variable) %>% unique() %>% as.matrix() %>% match(.,dfVariable$variable) -> sig_models
+dfVariable$variable[sig_models]
 
 # loop it and provide titles
 for(i in sig_models){
@@ -955,56 +956,63 @@ Very nice!
 It may be worth coming back to this type of analysis (RSM and multivariate) after getting the sequencing data in - like Shannon's index of bristles, RA of different otu's, etc.
 
 Take out non-significant RSM terms in models, re-visualize (do by turning coefficient estimate into zero? AIC selection?)
-```{r remove non-significant terms}
-# without validation points, rsm package
-rsm_hist %>% dplyr::select(mfc,type,temp,acetate,trans_cumulative_energy_J) %>% filter(type!="validation") -> data
-rsm(trans_cumulative_energy_J ~ SO(temp, acetate), data = data) %>% step()
+```{r find best models with step()}
+# # try using step on a single rsm model to verify method -  note "rsm" modeling method groups FO and PQ terms together, not good for aic
+# rsm_hist %>% select(mfc,type,temp,acetate,trans_voltage)  %>% filter(type!="validation") %>% gather("variable","value",c(5:ncol(.))) %>% group_by(variable) %>% do(fitVariable = lm(value ~ I(temp^2)+I(acetate^2)+temp+acetate+temp*acetate, data = .)) -> dfVariable
+# tidy(dfVariable, fitVariable)
+# #now with step
+# rsm_hist %>% select(mfc,type,temp,acetate,trans_voltage)  %>% filter(type!="validation") %>% gather("variable","value",c(5:ncol(.))) %>% group_by(variable) %>% do(fitVariable = step(trace=0,lm(value ~ I(temp^2)+I(acetate^2)+temp+acetate+temp*acetate, data = .))) -> dfVariable
+# tidy(dfVariable, fitVariable)
+# # seems to work well
 
-#regular lm fit - seems to work better with step()
-rsm_hist %>% dplyr::select(mfc,type,temp,acetate,trans_cumulative_energy_J) %>% filter(type!="validation") -> data
-lm(trans_cumulative_energy_J ~ I(temp*2)+I(acetate^2)+temp+acetate+temp*acetate, data = data) %>% step()
-
-# without validation points, filtered for only the significant models, then stepped with AIC
-dfVariableCoef %>% filter(p.value<=.05,term != "(Intercept)") %>% select(variable) %>% unique() %>% as.matrix() -> sig_models_names
-rsm_hist %>% select(mfc,type,temp,acetate,sig_models_names)  %>% filter(type!="validation") %>% gather("variable","value",c(5:ncol(.))) %>% group_by(variable) %>% do(fitVariable = step(lm(value ~ I(temp*2)+I(acetate^2)+temp+acetate+temp*acetate, data = .))) -> dfVariable
+# without validation points, then stepped with AIC
+rsm_hist %>% select(mfc,type,temp,acetate,starts_with("trans")) %>% filter(type!="validation") %>% gather("variable","value",c(5:ncol(.))) %>% group_by(variable) %>% do(fitVariable = step(trace=0,lm(value ~ I(temp^2)+I(acetate^2)+temp+acetate+temp*acetate, data = .))) -> dfVariable
  
 # get the coefficients by group in a tidy data_frame
 dfVariableCoef = tidy(dfVariable, fitVariable)
 dfVariableCoef
 # dfVariableCoef %>% filter(p.value<=.05,term != "(Intercept)")
 
-# # get the predictions by group in a tidy data_frame - doesn't work
-# # dfVariablePred = augment(dfVariable,fitVariable)
-# # dfVariablePred
-# 
+# # get the predictions by group in a tidy data_frame 
+dfVariablePred = augment(dfVariable,fitVariable)
+dfVariablePred
+
 # get the summary statistics by group in a tidy data_frame
 dfVariableSumm = glance(dfVariable, fitVariable)
 dfVariableSumm
 
-# get all significant models (already selected only significant ones)
-dfVariableCoef %>% select(variable) %>% unique() %>% as.matrix() %>% match(.,dfVariable$variable) -> sig_models
 
-# loop it, visualize, and provide titles - why isn't this working?
-dfVariable$fitVariable[1] %>% unlist(recursive = FALSE) %>% structure(class = "lm") -> model
-  persp(model, ~ temp + acetate, col = rainbow(50), contours = "colors")
-  title(main = paste(dfVariable$variable[i],"excluding validation points"))
+# get all significant models
+dfVariableCoef %>% filter(p.value<=.05,term != "(Intercept)") %>% select(variable) %>% unique() %>% as.matrix() %>% match(.,dfVariable$variable) -> sig_models
+dfVariable$variable[sig_models]
+# loop it, visualize, and provide titles
+# dfVariable$fitVariable[1] %>% unlist(recursive = FALSE) %>% structure(class = "lm") -> model
+#   persp(model, ~ temp + acetate, col = rainbow(50), contours = "colors")
+#   title(main = paste(dfVariable$variable[i],"excluding validation points"))
 
-
+# loop it and provide titles - looks like it doesn't know what to do when trans or acetate coefficients are undefined
 for(i in sig_models){
  dfVariable$fitVariable[i] %>% unlist(recursive = FALSE) %>% structure(class = "lm") %>%
   persp(., ~ temp + acetate, col = rainbow(50), contours = "colors")
   title(main = paste(dfVariable$variable[i],"excluding validation points"))
 }
+
+
 ```
-
-
 
 How well do each of these models predict the validation points?
 ```{r model validation}
-rsm_hist %>% select(mfc,type,temp,acetate,starts_with("trans"))  %>% filter(type=="validation") -> new.data
-predict(dfVariable$fitVariable[1],newdata = new.data, interval = "confidence") #note this predicts trans_ce using the full rsm for my two validation points
+rsm_hist %>% select(mfc,type,temp,acetate,dfVariable$variable[sig_models])  %>% filter(type=="validation") -> new.data
 
+#Try with one model
+predict(dfVariable$fitVariable[3],newdata = new.data, interval = "predict") 
+
+#Try with all models
+rsm_hist %>% select(mfc,type,temp,acetate,dfVariable$variable[sig_models])  %>% filter(type=="validation") %>% gather("variable","value",c(5:ncol(.))) %>% group_by(variable) %>% 
+  bind_cols(.,data.frame(do.call(rbind, predict(dfVariable$fitVariable[sig_models],newdata = new.data, interval = "predict")))) %>%    mutate(good_prediction = value>lwr&value<upr)
+```
+What are the optimum conditions for each response surface?
+```{r}
 
 ```
 
-What are the optimum conditions for each response surface?
