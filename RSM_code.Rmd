@@ -957,14 +957,6 @@ It may be worth coming back to this type of analysis (RSM and multivariate) afte
 
 Take out non-significant RSM terms in models, re-visualize (do by turning coefficient estimate into zero? AIC selection?)
 ```{r find best models with step()}
-# # try using step on a single rsm model to verify method -  note "rsm" modeling method groups FO and PQ terms together, not good for aic
-# rsm_hist %>% select(mfc,type,temp,acetate,trans_voltage)  %>% filter(type!="validation") %>% gather("variable","value",c(5:ncol(.))) %>% group_by(variable) %>% do(fitVariable = lm(value ~ I(temp^2)+I(acetate^2)+temp+acetate+temp*acetate, data = .)) -> dfVariable
-# tidy(dfVariable, fitVariable)
-# #now with step
-# rsm_hist %>% select(mfc,type,temp,acetate,trans_voltage)  %>% filter(type!="validation") %>% gather("variable","value",c(5:ncol(.))) %>% group_by(variable) %>% do(fitVariable = step(trace=0,lm(value ~ I(temp^2)+I(acetate^2)+temp+acetate+temp*acetate, data = .))) -> dfVariable
-# tidy(dfVariable, fitVariable)
-# # seems to work well
-
 # without validation points, then stepped with AIC
 rsm_hist %>% select(mfc,type,temp,acetate,starts_with("trans")) %>% filter(type!="validation") %>% gather("variable","value",c(5:ncol(.))) %>% group_by(variable) %>% do(fitVariable = step(trace=0,lm(value ~ I(temp^2)+I(acetate^2)+temp+acetate+temp*acetate, data = .))) -> dfVariable
  
@@ -985,18 +977,22 @@ dfVariableSumm
 # get all significant models
 dfVariableCoef %>% filter(p.value<=.05,term != "(Intercept)") %>% select(variable) %>% unique() %>% as.matrix() %>% match(.,dfVariable$variable) -> sig_models
 dfVariable$variable[sig_models]
-# loop it, visualize, and provide titles
-# dfVariable$fitVariable[1] %>% unlist(recursive = FALSE) %>% structure(class = "lm") -> model
-#   persp(model, ~ temp + acetate, col = rainbow(50), contours = "colors")
-#   title(main = paste(dfVariable$variable[i],"excluding validation points"))
 
-# loop it and provide titles - looks like it doesn't know what to do when trans or acetate coefficients are undefined
+# loop it and provide titles - looks like it doesn't know what to do when acetate coefficients are undefined
+alternativeFunction <- function(){
+    newdat = data.frame(temp = seq(min(rsm_hist$temp),max(rsm_hist$temp),length.out = 100))
+  newdat$pred = predict(model, newdata = newdat)
+  plot(unlist(rsm_hist[dfVariable$variable[i]]) ~ temp, data = rsm_hist, main = paste(dfVariable$variable[i],"excluding validation points (AIC model)"),xlab="Temperature",ylab=dfVariable$variable[i])
+  with(newdat, lines(x = temp, y = pred))
+    }
+
 for(i in sig_models){
- dfVariable$fitVariable[i] %>% unlist(recursive = FALSE) %>% structure(class = "lm") %>%
-  persp(., ~ temp + acetate, col = rainbow(50), contours = "colors")
-  title(main = paste(dfVariable$variable[i],"excluding validation points"))
+  dfVariable$fitVariable[i] %>% unlist(recursive = FALSE) %>% structure(class = "lm") -> model
+t <- try(
+  persp(model, ~ temp + acetate, col = rainbow(50), contours = "colors", main = paste(dfVariable$variable[i],"excluding validation points (AIC model)")))
+if("try-error" %in% class(t)) 
+  alternativeFunction()
 }
-
 
 ```
 
@@ -1011,8 +1007,14 @@ predict(dfVariable$fitVariable[3],newdata = new.data, interval = "predict")
 rsm_hist %>% select(mfc,type,temp,acetate,dfVariable$variable[sig_models])  %>% filter(type=="validation") %>% gather("variable","value",c(5:ncol(.))) %>% group_by(variable) %>% 
   bind_cols(.,data.frame(do.call(rbind, predict(dfVariable$fitVariable[sig_models],newdata = new.data, interval = "predict")))) %>%    mutate(good_prediction = value>lwr&value<upr)
 ```
-What are the optimum conditions for each response surface?
+What are the optimum conditions for each response surface? Local vs. global? Inside or outside design space?
 ```{r}
+dfVariable[sig_models,]
+
+
+
+
 
 ```
 
+What does the DNA analysis look like?
