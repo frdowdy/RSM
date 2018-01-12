@@ -958,7 +958,7 @@ It may be worth coming back to this type of analysis (RSM and multivariate) afte
 Take out non-significant RSM terms in models, re-visualize (do by turning coefficient estimate into zero? AIC selection?)
 ```{r find best models with step()}
 # without validation points, then stepped with AIC
-rsm_hist %>% select(mfc,type,temp,acetate,starts_with("trans")) %>% filter(type!="validation") %>% gather("variable","value",c(5:ncol(.))) %>% group_by(variable) %>% do(fitVariable = step(trace=0,lm(value ~ I(temp^2)+I(acetate^2)+temp+acetate+temp*acetate, data = .))) -> dfVariable
+rsm_hist %>% select(mfc,type,temp,acetate,starts_with("trans")) %>% filter(type!="validation") %>% gather("variable","value",c(5:ncol(.))) %>% group_by(variable) %>% do(fitVariable = step(trace=0,lm(value ~ temp+acetate+I(temp^2)+I(acetate^2)+temp:acetate, data = .))) -> dfVariable
  
 # get the coefficients by group in a tidy data_frame
 dfVariableCoef = tidy(dfVariable, fitVariable)
@@ -1001,20 +1001,114 @@ How well do each of these models predict the validation points?
 rsm_hist %>% select(mfc,type,temp,acetate,dfVariable$variable[sig_models])  %>% filter(type=="validation") -> new.data
 
 #Try with one model
-predict(dfVariable$fitVariable[3],newdata = new.data, interval = "predict") 
+# predict(dfVariable$fitVariable[3],newdata = new.data, interval = "predict") 
 
 #Try with all models
 rsm_hist %>% select(mfc,type,temp,acetate,dfVariable$variable[sig_models])  %>% filter(type=="validation") %>% gather("variable","value",c(5:ncol(.))) %>% group_by(variable) %>% 
-  bind_cols(.,data.frame(do.call(rbind, predict(dfVariable$fitVariable[sig_models],newdata = new.data, interval = "predict")))) %>%    mutate(good_prediction = value>lwr&value<upr)
+  bind_cols(.,data.frame(do.call(rbind, predict(dfVariable$fitVariable[sig_models],newdata = new.data, interval = "predict")))) %>%    mutate(good_prediction = value>lwr & value<upr)
 ```
-What are the optimum conditions for each response surface? Local vs. global? Inside or outside design space?
+What are the optimal conditions for each response surface? Local vs. global? Inside or outside design space?
 ```{r}
-dfVariable[sig_models,]
+df <- as_tibble(list(model=NA,temp=NA,acetate=NA,value=NA,maxmin=NA,locglo=NA))
 
+newdat = data.frame(temp = rep(seq(min(rsm_hist$temp),max(rsm_hist$temp),length.out = 1000),each=1000))
+newdat$acetate = rep(seq(min(rsm_hist$acetate),max(rsm_hist$acetate),length.out = 1000),times = 1000)
+  
+  
+for(i in sig_models){
+  dfVariable$fitVariable[i] %>% unlist(recursive = FALSE) %>% structure(class = "lm") -> model
+  
+  newdat$pred = predict(model, newdata = newdat)
+  
+  as_tibble(list(model=dfVariable$variable[i],temp=newdat$temp[which.min(newdat$pred)],acetate=newdat$acetate[which.min(newdat$pred)],value=min(newdat$pred),maxmin="min",locglo="loc")) %>% bind_rows(df,.) -> df 
+  
+ bind_rows(df,as_tibble(list(model=dfVariable$variable[i],temp=newdat$temp[which.max(newdat$pred)],acetate=newdat$acetate[which.max(newdat$pred)],value=max(newdat$pred),maxmin="max",locglo="loc"))            ) ->df
+ 
+}
+df[-1,]->df
+df$acetate[1:4] <- NA
+df
+```
+What about the global max mins? This has to be done manually because of the difference in models. Note: this method doesn't work for interaction terms.
+```{r}
+# http://r.789695.n4.nabble.com/how-to-compute-maximum-of-fitted-polynomial-td4668659.html
+packages(polynom)
 
+# loop and output in table
+glodf <- as_tibble(list(model=NA,
+  indepvar=NA,
+  indepvalue=NA,
+  depvalue=NA,
+  maxmin=NA,
+  locglo=NA))
 
+for(i in sig_models){
 
+dfVariable$fitVariable[i] %>% unlist(recursive = FALSE) %>% structure(class = "lm") -> model
+model %>% tidy %>% select(term,estimate) %>% filter(str_detect(term,'Intercept|temp')) %>% .$term == "temp" -> test
 
+model %>% tidy %>% select(term,estimate) %>% filter(str_detect(term,'Intercept|temp')) -> dat
+ifelse(any(test) == FALSE, 
+      
+      rbind(dat[1,],c("temp",0),dat[2,]) %>% select(estimate) %>% unlist %>% na.omit %>% polynomial->p0
+      ,
+      model %>% tidy %>% select(term,estimate) %>% filter(str_detect(term,'Intercept|temp')) %>% select(estimate) %>% unlist %>% polynomial->p0
+      )
+
+p1 <- deriv(p0); p2 <- deriv(p1) # first and second derivative
+xm <- solve(p1) # maxima and minima of p0
+xmax = xm[predict(p2, xm) < 0] # select the maxima
+as_tibble(list(
+  model=dfVariable$variable[i],
+  indepvar="temp",
+  indepvalue=xmax,
+  depvalue=predict(p0,xmax),
+  maxmin="max",
+  locglo="glo")) %>% rbind(glodf) -> glodf
+
+xmin = xm[predict(p2, xm) > 0] # select the minima
+as_tibble(list(
+  model=dfVariable$variable[i],
+  indepvar="temp",
+  indepvalue=xmin,
+  depvalue=predict(p0,xmin),
+  maxmin="min",
+  locglo="glo")) %>% rbind(glodf) -> glodf
+
+model %>% tidy %>% select(term,estimate) %>% filter(str_detect(term,'Intercept|acetate')) %>% .$term == "acetate" -> test
+model %>% tidy %>% select(term,estimate) %>% filter(str_detect(term,'Intercept|acetate')) -> dat
+ifelse(any(test) == FALSE, 
+      
+      rbind(dat[1,],c("acetate",0),dat[2,]) %>% select(estimate) %>% unlist %>% na.omit %>% polynomial->p0
+      ,
+      model %>% tidy %>% select(term,estimate) %>% filter(str_detect(term,'Intercept|acetate')) %>% select(estimate) %>% unlist %>% polynomial->p0
+      )
+p1 <- deriv(p0); p2 <- deriv(p1) # first and second derivative
+xm <- solve(p1) # maxima and minima of p0
+xmax = xm[predict(p2, xm) < 0] # select the maxima
+
+as_tibble(list(
+  model=dfVariable$variable[i],
+  indepvar="acetate",
+  indepvalue=xmax,
+  depvalue=predict(p0,xmax),
+  maxmin="max",
+  locglo="glo"))%>% rbind(glodf) -> glodf
+
+xmin = xm[predict(p2, xm) > 0] # select the minima
+as_tibble(list(
+  model=dfVariable$variable[i],
+  indepvar="acetate",
+  indepvalue=xmin,
+  depvalue=predict(p0,xmin),
+  maxmin="min",
+  locglo="glo"))%>% rbind(glodf) -> glodf
+}
+glodf %>% filter(model!="NA") -> glodf
+glodf<-glodf[dim(glodf)[1]:1,] #reverse the order
+
+#note - the following is a pretty ugly workaround
+glodf %>% spread(indepvar,indepvalue) %>% filter(!is.na(depvalue)) %>% group_by(model,maxmin) %>% fill(temp,acetate) %>% fill(temp,acetate,.direction = "up") %>% select(model,temp,acetate,maxmin,locglo) %>% distinct(model,temp,acetate,maxmin,locglo) %>% group_by(model) %>% fill(temp,acetate) %>% fill(temp,acetate,.direction = "up") %>% distinct(model,.keep_all = TRUE) %>% mutate(value = diag(as.matrix(do.call(rbind,predict(dfVariable$fitVariable[match(.$model,dfVariable$variable)],newdata=.))))) %>% bind_rows(df)
 ```
 
 What does the DNA analysis look like?
