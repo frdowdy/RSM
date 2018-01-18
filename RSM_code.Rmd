@@ -753,6 +753,7 @@ summary(rsm)
 persp(rsm, ~ temp + acetate, col = rainbow(50), contours = "colors")
 ```
 
+
 IVIS Image data
 ```{r get IVIS data}
 read_tsv('./IVIS/ivis_measurements.txt') -> ivis
@@ -848,7 +849,7 @@ rsm_hist %>% as_tibble() %>% select(-c(mfc,type,temp,acetate)) %>% select(starts
 ```
 Now that we've got the data let's do multivariate analysis.
 Note the p matrix isn't symmetric for corr.test(...,adjust="BH")
-```{r}
+```{r, fig.height=7, fig.width=7}
 # https://cran.r-project.org/web/packages/corrplot/vignettes/corrplot-intro.html
 packages(psych)
 corr.test(rsm_hist_trans,adjust = "none") -> trans_corr
@@ -860,7 +861,7 @@ corrplot(trans_corr$r, type = "lower", order = "hclust", p.mat = trans_corr$p, s
 
 #make diagonal excluded
 diag(trans_corr$p) <- 1
-corrplot(trans_corr$r, type = "full", method = "ellipse",order = "hclust", p.mat = trans_corr$p, sig.level = 0.05, insig = "blank",tl.col = "black")
+corrplot(trans_corr$r, type = "full", method = "ellipse",order = "hclust", p.mat = trans_corr$p, sig.level = 0.05, insig = "blank",tl.col = "black", tl.srt = 45)
 ```
 Let's check and make sure we get the same BH values in JMP. Slightly different, but the same number of significant values.
 ```{r}
@@ -1005,7 +1006,7 @@ rsm_hist %>% select(mfc,type,temp,acetate,dfVariable$variable[sig_models])  %>% 
 
 #Try with all models
 rsm_hist %>% select(mfc,type,temp,acetate,dfVariable$variable[sig_models])  %>% filter(type=="validation") %>% gather("variable","value",c(5:ncol(.))) %>% group_by(variable) %>% 
-  bind_cols(.,data.frame(do.call(rbind, predict(dfVariable$fitVariable[sig_models],newdata = new.data, interval = "predict")))) %>%    mutate(good_prediction = value>lwr & value<upr)
+  bind_cols(.,data.frame(do.call(rbind, predict(dfVariable$fitVariable[sig_models],newdata = new.data, interval = "predict")))) %>%    mutate(good_prediction = value>lwr & value<upr) %>% write_csv("validation.csv")
 ```
 What are the optimal conditions for each response surface? Local vs. global? Inside or outside design space?
 ```{r}
@@ -1108,7 +1109,11 @@ glodf %>% filter(model!="NA") -> glodf
 glodf<-glodf[dim(glodf)[1]:1,] #reverse the order
 
 #note - the following is a pretty ugly workaround
-glodf %>% spread(indepvar,indepvalue) %>% filter(!is.na(depvalue)) %>% group_by(model,maxmin) %>% fill(temp,acetate) %>% fill(temp,acetate,.direction = "up") %>% select(model,temp,acetate,maxmin,locglo) %>% distinct(model,temp,acetate,maxmin,locglo) %>% group_by(model) %>% fill(temp,acetate) %>% fill(temp,acetate,.direction = "up") %>% distinct(model,.keep_all = TRUE) %>% mutate(value = diag(as.matrix(do.call(rbind,predict(dfVariable$fitVariable[match(.$model,dfVariable$variable)],newdata=.))))) %>% bind_rows(df)
+glodf %>% spread(indepvar,indepvalue) %>% filter(!is.na(depvalue)) %>% group_by(model,maxmin) %>% fill(temp,acetate) %>% fill(temp,acetate,.direction = "up") %>% select(model,temp,acetate,maxmin,locglo) %>% distinct(model,temp,acetate,maxmin,locglo) %>% group_by(model) %>% fill(temp,acetate) %>% fill(temp,acetate,.direction = "up") %>% distinct(model,.keep_all = TRUE) %>% mutate(value = diag(as.matrix(do.call(rbind,predict(dfVariable$fitVariable[match(.$model,dfVariable$variable)],newdata=.))))) %>% bind_rows(df) %>% write_csv("glolocmaxmin.csv")
 ```
 
 What does the DNA analysis look like?
+```{r}
+
+```
+
