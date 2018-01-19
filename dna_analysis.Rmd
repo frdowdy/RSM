@@ -231,7 +231,63 @@ if("try-error" %in% class(t))
 }
 
 ```
-
-
 #OTUs vs Clusters
+```{r Co-occurrence across all OTUs, message = FALSE, warning=FALSE,fig.width=9,fig.height=9}
+  
+  # This is an area of networks where we study OTU's in the same environment that "co-occur". First we will filter data by co-occurence. Minimum recommended is 20%.
+  
+  #filter OTU's to 50% presence in all samples
+  biom_fil=cooccur_filter(RA=biom$RA.Otus,co_per=0.5)
+  
+  #run co-occurence. Taxon can be excluded and identified later if desired.
+  biom_netw=cooccurrence(biom_fil,taxon = biom$taxon)
+  
+  #try plotting the data
+  # plot.igraph(biom_netw$netw) # standard plot function for igraph package
+  # tkplot(biom_netw$netw) #interactive plot viewer
+  # rglplot(biom_netw$netw) #experimental 3d plot viewer
+  
+  #Or by using ggnet2 (https://briatte.github.io/ggnet/)
+  packages(network)
+  packages(sna)
+  packages(RColorBrewer)
+  packages(intergraph)
+  
+  # Visualize
+  set.seed(101)
+  (network_plot <- ggnet2(biom_netw$netw, size = 6, color = "tomato", label=T, label.size=2))
+```
+```{r plot community networks,fig.width=12,fig.height=9}
+# infomap community detection. Try the different detection algorithms to understand how different your niches might be broken up
+biom_info=infomap.community(biom_netw$netw)
+
+
+#now add some color to your previous plot (Josh's Method)
+  #plot(biom_netw$netw,vertex.color=as.factor(biom_info$membership))
+  
+#Create a custom color scale
+n <- max(biom_info$membership)
+library(RColorBrewer)
+myColors <- colorRampPalette(brewer.pal(12, "Paired"))(n)
+names(myColors) <- levels(as.factor(biom_info$membership))
+colScale <- scale_colour_manual(name = "Cluster",values = myColors)
+
+#Plot with ggnet
+nodesize <- 8
+set.seed(101)
+(plot_ggnet <- ggnet2(biom_netw$netw, size = nodesize, 
+                      node.color = as.factor(biom_info$membership), 
+                      color.legend = "Cluster",
+                      label=T, 
+                      label.size=2)+
+    colScale+
+    guides(colour = guide_legend(override.aes = list(size=nodesize))))
+    
+
+``` 
+#Samples vs KOs
+```{r}
+# get metagenome data from PICRUST
+
+```
 
