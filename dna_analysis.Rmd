@@ -1,0 +1,237 @@
+---
+title: "dna_analysis"
+output:
+  html_document: default
+  html_notebook: default
+---
+
+First we're going to set up R to to our target directory and clear the workspace.
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE, 
+                      message = FALSE,
+                      engine = "R", # Chunks will always have R code, unless noted
+                      error = TRUE,
+                      fig.path="Figures/",  # Set the figure options
+                      fig.align = "center",
+                      dev='png')
+
+```
+
+Clear RStudio
+```{r clear}
+  # cat(rep("\n",50)) # Clear Console
+  # rm(list=ls(all=TRUE)) # clear workspace
+  graphics.off() # closes all graphics
+```
+
+Install functions
+```{r }
+source("R/functions.R")
+```
+Install packages
+```{r}
+packages(tidyverse)
+packages(devtools) # List additional needed packages here on new lines with "packages(NAME)"
+packages(xlsx)
+packages(survival) # dependency for microbiome package
+packages(Formula) # dependency for microbiome package
+packages(ggplot2) # dependency for microbiome package
+packages(acepack) # dependency for microbiome package
+packages(base64enc) # dependency for microbiome package
+packages(gridExtra) # dependency for microbiome package
+packages(htmltools)
+packages(stringi)
+packages(htmlTable) # dependency for microbiome package
+packages(data.table) # dependency for microbiome package
+packages(permute) # dependency for microbiome package
+packages(ggthemes)
+packages(GGally)
+packages(survival)
+source("https://bioconductor.org/biocLite.R")
+# biocLite("WGCNA")
+# biocLite("preprocessCore")
+# install_github("jtclaypool/microbiome")
+#missing dependencies may need to be installed from Bioconductor
+#install missing packages by (for preprocessCore):
+#source("https://bioconductor.org/biocLite.R")
+#biocLite("preprocessCore")
+packages(microbiome)
+```
+
+```{r get dummy data, message = FALSE, warning=FALSE}
+#metadata
+meta <- read_tsv("C:/Users/Ryan/Google Drive/UC Davis/Publications/MFC Microbiome Paper - Experiment 15/metadata_frd_exp15.txt")
+biom <- read.biom("data/dummy_data.txt")
+```
+
+Fix Metadata
+```{r fix metadata}
+# This section fixes the metadata to match between the metadata labels and the R biome labels
+  # Note that R puts an X in front of any column header that starts with a number, and dashes and other special characters are replaced by periods
+  meta$Label = paste("X",meta$Label,sep = "")
+  meta$Label = gsub("-",".", meta$Label)
+```
+
+Make dummy data resemble Exp23 RSM data set of 15 samples
+```{r}
+meta <- meta[1:15,]
+meta <- meta %>% select(Label) %>% cbind(.,read_csv("rsm_hist.csv")[,1:4])
+```
+
+#Sample vs OTU
+```{r Simple Relative Abundance}
+# Here we can make our generic barplot of relative abundance. We can also then transform it into something fancier!
+ra_plot=barplot_RA(biom$RA.Otus,tax = biom$taxon,meta = meta,category = "temp",top = 5)
+
+# plot is stored in list variable RA_plot
+# RA_plot is a ggplot2 object and can be manipulated according to make publication ready graph
+# for example adding an x-axis label and changing the legend title
+
+ggplot(data = ra_plot$top_long,aes(x=factor(label,levels = c("-1","0","1")),y=value,fill=variable))+ # this reorders x     axis values
+  geom_bar(stat="identity")+
+  scale_x_discrete("Temperature")+ # Labels categorical labels on x axis
+  ylab("Relative Abundance (%)")+ 
+  theme(legend.title=element_text(),legend.position="right",plot.title = element_text(hjust=0.5))+
+  guides(fill=guide_legend("Phylum"))+
+  theme_few()
+
+ra_plot=barplot_RA(biom$RA.Otus,tax = biom$taxon,meta = meta,category = "acetate",top = 5)
+
+ggplot(data = ra_plot$top_long,aes(x=factor(label,levels = c("-1","0","0.5","1")),y=value,fill=variable))+ # this reorders x     axis values
+  geom_bar(stat="identity")+
+  scale_x_discrete("Acetate")+ # Labels categorical labels on x axis
+  ylab("Relative Abundance (%)")+ 
+  theme(legend.title=element_text(),legend.position="right",plot.title = element_text(hjust=0.5))+
+  guides(fill=guide_legend("Phylum"))+
+  theme_few()
+```
+```{r nmds plots}
+veg=vegan_wrapper(biom$RA.Otus,meta = meta,category_1 = "temp",category_2 = "acetate")
+
+veg$NMDS_plot+
+    theme_few()+
+    scale_shape_discrete(name="Acetate")+
+    scale_colour_discrete(name = "Temperature")
+    
+# pull data out to better make plot
+NMDS.data <- veg$NMDS_plot$data
+NMDS.data <- NMDS.data %>% mutate_at(vars(category_1,category_2),funs(as.factor))
+
+# https://gist.github.com/rmaia/5296401
+ ggplot(data=NMDS.data, aes(x=MDS1, y=MDS2, color=category_1)) + geom_point(aes(shape=category_2),size=3)+
+       scale_shape_manual(name = "Acetate",values=15:18)+
+    # scale_colour_discrete(name = "Temperature")+
+   scale_colour_grey(name = "Temperature", start = 0.2, end = 0.8)
+   
+  
+
+```
+```{r ecological metrics}
+# calc richnness, evenness, diversity each community
+# diversity
+div <- diversity(biom$RA.Otus, index = "shannon")
+# richness
+rich <- specnumber(biom$RA.Otus)
+# evenness
+even <- diversity(biom$RA.Otus, index = "shannon")/log(specnumber(biom$RA.Otus))
+# all in one
+rsm_hist <- data.frame(Label = names(div),diversity = div,richness = rich,evenness = even,row.names = NULL) %>% 
+  join(meta,.) %>% 
+  join(read_csv("rsm_hist.csv"),.) %>% #data from first script RSM_code.Rmd. Start building rsm_hist here in script.
+  arrange(mfc)
+```
+```{r rsm of ecological metrics}
+# without validation points, then stepped with AIC
+dfVariable <- rsm_hist %>% select(mfc,type,temp,acetate,diversity,richness,evenness) %>% 
+  filter(type!="validation") %>% 
+  gather("variable","value",c(5:ncol(.))) %>% 
+  group_by(variable) %>% 
+  do(fitVariable = step(trace=0,lm(value ~ temp+acetate+I(temp^2)+I(acetate^2)+temp:acetate, data = .)))
+
+# get the coefficients by group in a tidy data_frame
+dfVariableCoef = tidy(dfVariable, fitVariable)
+dfVariableCoef
+
+
+# # get the predictions by group in a tidy data_frame 
+dfVariablePred = augment(dfVariable,fitVariable)
+dfVariablePred
+
+# get the summary statistics by group in a tidy data_frame
+dfVariableSumm = glance(dfVariable, fitVariable)
+dfVariableSumm
+
+
+# get all significant models
+dfVariableSumm %>% filter(p.value<=.05) %>% select(variable) %>% unique() %>% as.matrix() %>% match(.,dfVariable$variable) -> sig_models
+dfVariable$variable[sig_models]
+
+# loop it and provide titles - looks like it doesn't know what to do when acetate coefficients are undefined
+alternativeFunction <- function(){
+    newdat = data.frame(temp = seq(min(rsm_hist$temp),max(rsm_hist$temp),length.out = 100))
+  newdat$pred = predict(model, newdata = newdat)
+  plot(unlist(rsm_hist[dfVariable$variable[i]]) ~ temp, data = rsm_hist, main = paste(dfVariable$variable[i],"excluding validation points (AIC model)"),xlab="Temperature",ylab=dfVariable$variable[i])
+  with(newdat, lines(x = temp, y = pred))
+    }
+
+for(i in sig_models){
+  dfVariable$fitVariable[i] %>% unlist(recursive = FALSE) %>% structure(class = "lm") -> model
+t <- try(
+  persp(model, ~ temp + acetate, col = rainbow(50), contours = "colors", main = paste(dfVariable$variable[i],"excluding validation points (AIC model)")))
+if("try-error" %in% class(t)) 
+  alternativeFunction()
+}
+
+```
+Also a good idea to try transforming data.
+```{r}
+rsm_hist <- rsm_hist %>% select(diversity,richness,evenness) %>% apply_transform %>% cbind(rsm_hist,.)
+
+# without validation points, then stepped with AIC
+dfVariable <- rsm_hist %>% select(mfc,type,temp,acetate,trans_diversity,trans_richness,trans_evenness) %>% 
+  filter(type!="validation") %>% 
+  gather("variable","value",c(5:ncol(.))) %>% 
+  group_by(variable) %>% 
+  do(fitVariable = step(trace=0,lm(value ~ temp+acetate+I(temp^2)+I(acetate^2)+temp:acetate, data = .)))
+
+# get the coefficients by group in a tidy data_frame
+dfVariableCoef = tidy(dfVariable, fitVariable)
+dfVariableCoef
+
+
+# # get the predictions by group in a tidy data_frame 
+dfVariablePred = augment(dfVariable,fitVariable)
+dfVariablePred
+
+# get the summary statistics by group in a tidy data_frame
+dfVariableSumm = glance(dfVariable, fitVariable)
+dfVariableSumm
+
+
+# get all significant models
+dfVariableSumm %>% filter(p.value<=.05) %>% select(variable) %>% unique() %>% as.matrix() %>% match(.,dfVariable$variable) -> sig_models
+dfVariable$variable[sig_models]
+
+# This should probably be turned into a function in the functions.R script
+# loop it and provide titles - looks like it doesn't know what to do when acetate coefficients are undefined
+alternativeFunction <- function(){
+    newdat = data.frame(temp = seq(min(rsm_hist$temp),max(rsm_hist$temp),length.out = 100))
+  newdat$pred = predict(model, newdata = newdat)
+  plot(unlist(rsm_hist[dfVariable$variable[i]]) ~ temp, data = rsm_hist, main = paste(dfVariable$variable[i],"excluding validation points (AIC model)"),xlab="Temperature",ylab=dfVariable$variable[i])
+  with(newdat, lines(x = temp, y = pred))
+    }
+
+for(i in sig_models){
+  dfVariable$fitVariable[i] %>% unlist(recursive = FALSE) %>% structure(class = "lm") -> model
+t <- try(
+  persp(model, ~ temp + acetate, col = rainbow(50), contours = "colors", main = paste(dfVariable$variable[i],"excluding validation points (AIC model)")))
+if("try-error" %in% class(t)) 
+  alternativeFunction()
+}
+
+```
+
+
+#OTUs vs Clusters
+
