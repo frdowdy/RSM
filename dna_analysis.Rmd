@@ -370,64 +370,13 @@ genes_filtered %>%
 genes_agg <- predicted_metagenome$RA.genes %>% mutate(Label = rownames(.)) %>% select(Label,everything())
 # Convert wide format into long format table
 genes_melt <- genes_agg %>% gather(.,key = "variable",value = "value",-Label)
-genes_melt[1:20,]
 # Filter by whatever genes of interest
 genes_filtered <- genes_melt[which(genes_melt$variable %in% unlist(kos_exoelectrogenic)),]
-
 #append to rsm_hist
 rsm_hist <- genes_filtered %>% spread(variable,value) %>% left_join(rsm_hist,.,by="Label")
 #apply transform
 rsm_hist <- rsm_hist %>% select(starts_with("K")) %>% apply_transform %>% bind_cols(rsm_hist,.)
-
 #run rsm and visualize
-data <- rsm_hist
-response_cols <- data %>% select(starts_with("trans_K")) %>% colnames
-
-# without validation points, then stepped with AIC
-dfVariable <- data %>% select(mfc,type,temp,acetate,response_cols) %>% 
-  filter(type!="validation") %>% 
-  gather("variable","value",c(5:ncol(.))) %>% 
-  group_by(variable) %>% 
-  do(fitVariable = step(trace=0,lm(value ~ temp+acetate+I(temp^2)+I(acetate^2)+temp:acetate, data = .)))
-
-# get the coefficients by group in a tidy data_frame
-dfVariableCoef = tidy(dfVariable, fitVariable)
-dfVariableCoef
-
-
-# # get the predictions by group in a tidy data_frame 
-dfVariablePred = augment(dfVariable,fitVariable)
-dfVariablePred
-
-# get the summary statistics by group in a tidy data_frame
-dfVariableSumm = glance(dfVariable, fitVariable)
-dfVariableSumm
-
-
-# get all significant models
-dfVariableSumm %>% filter(p.value<=.05) %>% select(variable) %>% unique() %>% as.matrix() %>% match(.,dfVariable$variable) -> sig_models
-dfVariable$variable[sig_models]
-
-# This should probably be turned into a function in the functions.R script
-# loop it and provide titles - looks like it doesn't know what to do when acetate coefficients are undefined
-alternativeFunction <- function(){
-    newdat = data.frame(temp = seq(min(rsm_hist$temp),max(rsm_hist$temp),length.out = 100))
-  newdat$pred = predict(model, newdata = newdat)
-  plot(unlist(rsm_hist[dfVariable$variable[i]]) ~ temp, data = rsm_hist, main = paste(dfVariable$variable[i],"excluding validation points (AIC model)"),xlab="Temperature",ylab=dfVariable$variable[i])
-  with(newdat, lines(x = temp, y = pred))
-    }
-
-for(i in sig_models){
-  dfVariable$fitVariable[i] %>% unlist(recursive = FALSE) %>% structure(class = "lm") -> model
-t <- try(
-  persp(model, ~ temp + acetate, col = rainbow(50), contours = "colors", main = paste(dfVariable$variable[i],"excluding validation points (AIC model)")))
-if("try-error" %in% class(t)) 
-  alternativeFunction()
-}
-
-
-
-#try with function 
 source("R/functions.R")
 rsm_and_visualize(data = rsm_hist,response_cols = rsm_hist %>% select(starts_with("trans_K")) %>% colnames)
 ```
