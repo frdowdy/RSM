@@ -21,7 +21,7 @@ knitr::opts_chunk$set(echo = TRUE,
 Clear RStudio
 ```{r clear}
   # cat(rep("\n",50)) # Clear Console
-  # rm(list=ls(all=TRUE)) # clear workspace
+  rm(list=ls(all=TRUE)) # clear workspace
   graphics.off() # closes all graphics
 ```
 
@@ -32,8 +32,8 @@ source("R/functions.R")
 Install packages
 ```{r}
 packages(tidyverse)
+packages(broom)
 packages(devtools) # List additional needed packages here on new lines with "packages(NAME)"
-packages(xlsx)
 packages(survival) # dependency for microbiome package
 packages(Formula) # dependency for microbiome package
 packages(ggplot2) # dependency for microbiome package
@@ -61,22 +61,39 @@ packages(microbiome)
 
 ```{r get dummy data, message = FALSE, warning=FALSE}
 #metadata
-meta <- read_tsv("C:/Users/Ryan/Google Drive/UC Davis/Publications/MFC Microbiome Paper - Experiment 15/metadata_frd_exp15.txt")
-biom <- read.biom("data/dummy_data.txt")
+
+meta <- read_csv("data/meta_dummy.csv") %>% filter(!is.na(`Sample Name`))
+#filter for samples of interest (anode here)
+meta <- meta %>% filter(str_sub(`Sample Label`,-1,-1)=="A")
+# meta <- meta %>% filter(str_sub(`Sample Label`,-1,-1)=="A" | str_sub(`Sample Label`,-1,-1)==1|str_sub(`Sample Label`,-1,-1)==2 )
+#paste on suffixes used by sequencing company
+sample_labels_of_interest <- meta %>% select(`Sample Label`) %>% unlist %>% paste("-MS515F",sep = "")
+#filter dna seq data for samples of interest and read in
+dummy_dna_seq_of_interest <- read_tsv("data/dummy_data.txt",skip=1) %>% 
+  select(`#OTU ID`,sample_labels_of_interest,ConsensusLineage)
+
+# have to add in first line "# Constructed from biom file"
+cat("# Constructed from biom file","\n",file="output/dummy_dna_seq_of_interest.txt")
+write.table(dummy_dna_seq_of_interest,file="output/dummy_dna_seq_of_interest.txt",append = TRUE,row.names=FALSE,quote = FALSE,sep = "\t")
+
+biom <- read.biom("output/dummy_dna_seq_of_interest.txt")
+rm(dummy_dna_seq_of_interest)
 ```
 
 Fix Metadata
 ```{r fix metadata}
 # This section fixes the metadata to match between the metadata labels and the R biome labels
   # Note that R puts an X in front of any column header that starts with a number, and dashes and other special characters are replaced by periods
-  meta$Label = paste("X",meta$Label,sep = "")
-  meta$Label = gsub("-",".", meta$Label)
+labels <- meta %>% select(`Sample Label`) %>% unlist %>% paste("-MS515F",sep = "") 
+meta$`Sample Label`<- ifelse(!is.na(as.numeric(str_sub(labels,1,1))), paste("X",labels,sep = ""), paste("",labels,sep = "")) %>% gsub("-",".", .)
 ```
 
 Make dummy data resemble Exp23 RSM data set of 15 samples
 ```{r}
-meta <- meta[1:15,]
-meta <- meta %>% select(Label) %>% cbind(.,read_csv("rsm_hist.csv")[,1:4])
+meta <- meta %>% mutate(mfc=as.numeric(str_extract(`Sample Name`,"\\d+")))
+meta <- meta %>% select(`Sample Label`,mfc) %>% left_join(.,read_csv("rsm_hist.csv")[,1:4])
+meta <- meta %>% dplyr::rename(Label = `Sample Label`)
+meta <- as.data.frame(meta)
 ```
 
 #Sample vs OTU
@@ -137,10 +154,11 @@ rich <- specnumber(biom$RA.Otus)
 even <- diversity(biom$RA.Otus, index = "shannon")/log(specnumber(biom$RA.Otus))
 # all in one
 rsm_hist <- data.frame(Label = names(div),diversity = div,richness = rich,evenness = even,row.names = NULL) %>% 
-  join(meta,.) %>% 
-  join(read_csv("rsm_hist.csv"),.) %>% #data from first script RSM_code.Rmd. Start building rsm_hist here in script.
+  left_join(meta,.) %>% 
+  left_join(read_csv("rsm_hist.csv"),.) %>% #data from first script RSM_code.Rmd. Start building rsm_hist here in script.
   arrange(mfc)
 ```
+
 ```{r rsm of ecological metrics}
 # without validation points, then stepped with AIC
 dfVariable <- rsm_hist %>% select(mfc,type,temp,acetate,diversity,richness,evenness) %>% 
@@ -153,8 +171,7 @@ dfVariable <- rsm_hist %>% select(mfc,type,temp,acetate,diversity,richness,evenn
 dfVariableCoef = tidy(dfVariable, fitVariable)
 dfVariableCoef
 
-
-# # get the predictions by group in a tidy data_frame 
+# get the predictions by group in a tidy data_frame 
 dfVariablePred = augment(dfVariable,fitVariable)
 dfVariablePred
 
@@ -176,6 +193,7 @@ alternativeFunction <- function(){
     }
 
 for(i in sig_models){
+  require(rsm)
   dfVariable$fitVariable[i] %>% unlist(recursive = FALSE) %>% structure(class = "lm") -> model
 t <- try(
   persp(model, ~ temp + acetate, col = rainbow(50), contours = "colors", main = paste(dfVariable$variable[i],"excluding validation points (AIC model)")))
@@ -184,7 +202,7 @@ if("try-error" %in% class(t))
 }
 
 ```
-Also a good idea to try transforming data.
+Also a good idea to try transforming data and doing RSM.
 ```{r}
 rsm_hist <- rsm_hist %>% select(diversity,richness,evenness) %>% apply_transform %>% cbind(rsm_hist,.)
 
@@ -257,6 +275,7 @@ if("try-error" %in% class(t))
   set.seed(101)
   (network_plot <- ggnet2(biom_netw$netw, size = 6, color = "tomato", label=T, label.size=2))
 ```
+Cluster network plot
 ```{r plot community networks,fig.width=12,fig.height=9}
 # infomap community detection. Try the different detection algorithms to understand how different your niches might be broken up
 biom_info=infomap.community(biom_netw$netw)
@@ -288,6 +307,7 @@ set.seed(101)
 #Samples vs KOs
 ```{r}
 # get metagenome data from PICRUST
+
 
 ```
 
