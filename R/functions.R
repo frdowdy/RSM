@@ -33,18 +33,12 @@ rsm_and_visualize <- function(data = "data",response_cols = "response_cols"){
     do(fitVariable = step(trace=0,lm(value ~ temp+acetate+I(temp^2)+I(acetate^2)+temp:acetate, data = .)))
     # get the coefficients by group in a tidy data_frame
   dfVariableCoef = tidy(dfVariable, fitVariable)
-  dfVariableCoef
-    # # get the predictions by group in a tidy data_frame 
+     # # get the predictions by group in a tidy data_frame 
   dfVariablePred = augment(dfVariable,fitVariable)
-  dfVariablePred
-    # get the summary statistics by group in a tidy data_frame
+      # get the summary statistics by group in a tidy data_frame
   dfVariableSumm = glance(dfVariable, fitVariable)
-  dfVariableSumm
-    # get all significant models
+   # get all significant models
   dfVariableSumm %>% filter(p.value<=.05) %>% select(variable) %>% unique() %>% as.matrix() %>% match(.,dfVariable$variable) -> sig_models
-  dfVariable$variable[sig_models]
-     
-  
   # loop it and provide titles - looks like it doesn't know what to do when acetate coefficients are undefined
    for(i in sig_models){
     dfVariable$fitVariable[i] %>% unlist(recursive = FALSE) %>% structure(class = "lm") -> model

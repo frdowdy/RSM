@@ -378,6 +378,120 @@ rsm_hist <- genes_filtered %>% spread(variable,value) %>% left_join(rsm_hist,.,b
 rsm_hist <- rsm_hist %>% select(starts_with("K")) %>% apply_transform %>% bind_cols(rsm_hist,.)
 #run rsm and visualize
 source("R/functions.R")
-rsm_and_visualize(data = rsm_hist,response_cols = rsm_hist %>% select(starts_with("trans_K")) %>% colnames)
+rsm_object <- rsm_and_visualize(data = rsm_hist,response_cols = rsm_hist %>% select(starts_with("trans_K")) %>% colnames)
+rsm_object
 ```
+#Clusters vs KOs
+```{r aggregate KOs by network cluster}
+# Read in metagenome contributions table (takes 2 min to read)
+a <- proc.time()
+ko_metagenome_contributions <- read.table("C:/Users/Ryan/Google Drive/UC Davis/Dissertation for PhD/data/Exp23/dummy_metagenome_contributions.tab", header = T, sep = "\t", fill=TRUE)
+proc.time()-a
+# chop off unnecessary phylogeny
+ko_metagenome_contributions <- ko_metagenome_contributions %>% select(-c(Kingdom,Phylum,Class,Order,Family,Genus,Species))
+# which quantitative column is of interest? GeneCountPerGenome because it's the only one that doesn't involve relative abundance normalized to sample
+
+# create lookup table
+otu_cluster_lookup <- data.frame("OTU" = biom_info$names,"Cluster" = biom_info$membership)
+# Lookup cluster number from lookup table
+ko_metagenome_contributions$Cluster <- otu_cluster_lookup[match(ko_metagenome_contributions$OTU,otu_cluster_lookup$OTU),"Cluster"]
+
+#filter out NA clusters
+filt_ko_metagenome_contributions <- ko_metagenome_contributions[!is.na(ko_metagenome_contributions$Cluster),]
+#remove unnecessary columns
+filt_ko_metagenome_contributions <- filt_ko_metagenome_contributions %>% select(-c(OTUAbundanceInSample,CountContributedByOTU,ContributionPercentOfSample,ContributionPercentOfAllSamples))
+head(filt_ko_metagenome_contributions)
+
+# within each cluster, sum GeneCountPerGenome by Gene
+filt_ko_metagenome_contributions <- aggregate(GeneCountPerGenome~Gene+Cluster,filt_ko_metagenome_contributions,sum)
+
+# calc relative abundance of KOs within total KO GeneCountPerGenome in cluster
+filt_ko_metagenome_contributions <- filt_ko_metagenome_contributions %>% group_by(Cluster) %>% mutate(relAbundByCluster = GeneCountPerGenome / sum(GeneCountPerGenome))
+
+# filter by target KOs
+filt_ko_metagenome_contributions <- filt_ko_metagenome_contributions[which(filt_ko_metagenome_contributions$Gene %in% unlist(kos_exoelectrogenic)),]
+
+# tidy up names
+colnames(filt_ko_metagenome_contributions) <- c("Gene","Cluster","GeneCount","relAbund")
+
+# Rescale 0 to 1 for heat map
+filt_ko_metagenome_contributions %>%  
+  group_by(Gene)%>% 
+  mutate(rescale = scales::rescale(relAbund)) %>% 
+  ggplot(data=.,aes(x=factor(Cluster),y=Gene,fill=rescale))+
+  geom_tile()+
+  scale_fill_gradient2("Rescaled gene relative abundance \n",guide="colourbar",high="#FF5733",low="#FDFEFE")+
+  xlab("Cluster")+
+  ylab("KEGG Ortholog")+
+  theme_few()+
+ scale_x_discrete(expand = c(0,0))+
+ scale_y_discrete(expand = c(0,0)) +
+ coord_fixed(ratio=1)
+```
+```{r anova on which clusters have highest proportion of exoelectrogenic KOs}
+filt_ko_metagenome_contributions %>%  select(-GeneCount) %>% 
+  spread(Gene,relAbund) %>% arrange(Cluster) -> data
+data %>% .[,-1] %>% apply_transform %>% bind_cols(data[,1],.) -> data
+
+#plot
+data %>% gather(key = "KO",value = "value",-Cluster) %>% 
+ggplot(., aes(x=factor(Cluster), y = value)) +
+    geom_boxplot(fill = "grey80", colour = "blue") +
+    scale_x_discrete() + xlab("Cluster") +
+    ylab("Transformed KO relative abundance") +
+    theme_few()
+#anova
+data %>% 
+  gather(key = "KO",value = "value",-Cluster) %>% 
+  aov(value~factor(Cluster),data = .) %>% 
+  summary
+data %>% 
+  gather(key = "KO",value = "value",-Cluster) %>% 
+  aov(value~factor(Cluster),data = .) %>% 
+  TukeyHSD -> Tukey
+  Tukey$`factor(Cluster)`[Tukey$`factor(Cluster)`[,4]<.2,]
+
+```
+#Cluster vs Sample
+```{r}
+#assign clusters of interest
+clusofinterest <- Tukey$`factor(Cluster)`[Tukey$`factor(Cluster)`[,4]<.2,] %>% rownames %>% as_tibble %>% separate(value,c("Cluster1","Cluster2")) %>% unlist %>% as.numeric %>% table %>% as_tibble %>% filter(n>1) %>% .[,1] %>% unlist %>% as.numeric
+
+# make a long form table we can aggregate
+ix <- which(colnames(biom$biom_tab) %in% c("Kingdom","Phylum","Class","Order","Family","Genus","Species")) # remove taxonomy info
+data <- biom$biom_tab[,-ix] 
+data <- t(data)
+data <- melt(data)
+colnames(data) <- c("Label","OTU","Reads")
+#assign clusters to OTUs
+data$Cluster <- otu_cluster_lookup[match(data$OTU,otu_cluster_lookup$OTU),"Cluster"]
+# aggregate reads by label and cluster
+agg_data <- aggregate(data$Reads,
+    by = list(Label = data$Label, Cluster = data$Cluster),
+    FUN = function(x) c(sum = sum(x)))
+colnames(agg_data) <- c("Label","Cluster","Cluster_reads_in_label")
+# aggregate reads by label
+agg_data_label <- aggregate(data$Reads,
+    by = list(Label = data$Label),
+    FUN = function(x) c(sum = sum(x)))
+# attach to agg_data
+agg_data$label_reads <- agg_data_label[match(agg_data$Label,agg_data_label$Label),"x"]
+# RA
+agg_data$RA_cluster_in_label <- 100*agg_data$Cluster_reads_in_label/agg_data$label_reads
+
+#reformat and attach to rsm_hist
+agg_data %>% select(Label,Cluster,RA_cluster_in_label) %>% spread(key = Cluster,value = RA_cluster_in_label) -> data
+colnames(data) %>% paste("cluster_",.,sep = "")->name_vector
+"Label"->name_vector[1]
+colnames(data) <- name_vector
+data %>% left_join(rsm_hist,.,by = "Label") -> rsm_hist
+data %>% .[,-1] %>% apply_transform %>% bind_cols(as_tibble(data$Label),.) %>% dplyr::rename("Label" = value) %>% left_join(rsm_hist,.,by = "Label") -> rsm_hist
+
+#run rsm and visualize
+source("R/functions.R")
+rsm_object <- rsm_and_visualize(data = rsm_hist,response_cols = rsm_hist %>% select(starts_with("cluster")) %>% colnames)
+rsm_object
+
+```
+
 
