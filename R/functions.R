@@ -15,16 +15,17 @@ apply_transform<-function(x){
   return(data_trans)
 }
 
-alternativeFunction <- function(){
+plot_temp <- function(){
   newdat = data.frame(temp = seq(min(rsm_hist$temp),max(rsm_hist$temp),length.out = 100))
   newdat$pred = predict(model, newdata = newdat)
   plot(unlist(rsm_hist[dfVariable$variable[i]]) ~ temp, data = rsm_hist, main = paste(dfVariable$variable[i],"excluding validation points (AIC model)"),xlab="Temperature",ylab=dfVariable$variable[i])
   with(newdat, lines(x = temp, y = pred))
-}
+  }
 
 rsm_and_visualize <- function(data = "data",response_cols = "response_cols"){
   require(tidyverse)
   require(rsm)
+  require(broom)
   # without validation points, then stepped with AIC
   dfVariable <- data %>% select(mfc,type,temp,acetate,response_cols) %>% 
     filter(type!="validation") %>% 
@@ -45,7 +46,9 @@ rsm_and_visualize <- function(data = "data",response_cols = "response_cols"){
     t <- try(
       persp(model, ~ temp + acetate, col = rainbow(50), contours = "colors", main = paste(dfVariable$variable[i],"excluding validation points (AIC model)")))
     if("try-error" %in% class(t)) 
-      alternativeFunction()
+    t <- try(plot_temp())
+    if("try-error" %in% class(t)) 
+      next
    }
   list(dfVariable = dfVariable,dfVariableCoef = dfVariableCoef,dfVariablePred = dfVariablePred,dfVariableSumm = dfVariableSumm)
 }

@@ -1,7 +1,9 @@
 ---
 title: "dna_analysis"
 output:
-  html_document: default
+  html_document:
+    toc: true
+    number_sections: true
   html_notebook: default
 ---
 
@@ -380,6 +382,12 @@ rsm_hist <- rsm_hist %>% select(starts_with("K")) %>% apply_transform %>% bind_c
 source("R/functions.R")
 rsm_object <- rsm_and_visualize(data = rsm_hist,response_cols = rsm_hist %>% select(starts_with("trans_K")) %>% colnames)
 rsm_object
+
+# how about for the average of all the exoelectrogenic KOs?
+rsm_hist <- rsm_hist %>% select(mfc,starts_with("trans_K")) %>% gather(trans_KO,value,-mfc) %>% group_by(mfc) %>% summarize(trans_KO_average = mean(value)) %>% right_join(rsm_hist,.)
+rsm_object <- rsm_and_visualize(data = rsm_hist,response_cols = "trans_KO_average")
+rsm_object
+
 ```
 #Clusters vs KOs
 ```{r aggregate KOs by network cluster}
@@ -492,6 +500,68 @@ source("R/functions.R")
 rsm_object <- rsm_and_visualize(data = rsm_hist,response_cols = rsm_hist %>% select(starts_with("cluster")) %>% colnames)
 rsm_object
 
+#on transformed
+rsm_object <- rsm_and_visualize(data = rsm_hist,response_cols = rsm_hist %>% select(starts_with("trans_cluster")) %>% colnames)
+rsm_object
+```
+#KOs vs OTUs
+```{r}
+clusofinterest
+# get data
+data <- ko_metagenome_contributions
+# filter by target OTUs
+target_otus <- otu_cluster_lookup %>% filter(Cluster == clusofinterest) %>% select(OTU) %>% unlist %>% droplevels()
+data <- droplevels(data[which(data$OTU %in% target_otus),])
+data$OTU <- factor(data$OTU)
+str(data)
+
+# filter to one sample to get whole genome for each OTU (each gene should appear only once for each OTU)
+
+data <- data %>% group_by(OTU) %>% distinct(Gene,.keep_all = TRUE)
+# chop off unneccesary columns
+data <- data %>% select(Gene,Sample,OTU,GeneCountPerGenome)
+
+# calc relative abundance of KOs within total KO GeneCountPerGenome in OTU
+data <- data %>% group_by(OTU) %>% mutate(relAbundByOTU = GeneCountPerGenome / sum(GeneCountPerGenome))
+
+# filter by target KOs
+data <- droplevels(data[which(data$Gene %in% unlist(kos_exoelectrogenic)),])
+
+# Rescale 0 to 1 for heat map (decided not to use this time)
+data <- data %>% group_by(Gene) %>% mutate(rescale = scales::rescale(relAbundByOTU))
+
+# plot heat map
+ggplot(data=data,aes(x=factor(OTU),y=Gene,fill=relAbundByOTU))+
+  geom_tile()+
+  scale_fill_gradient2("Gene relative abundance \n",guide="colourbar",high="#FF0000FF",mid="#FFFFD5FF")+
+  xlab("OTU")+
+  ylab("KEGG Ortholog")+
+  scale_x_discrete(expand = c(0,0))+
+ scale_y_discrete(expand = c(0,0)) +
+ coord_fixed(ratio=1)
+# can do anova on transformed KOs if needed
+```
+# Multivariate Analysis
+```{r, fig.height=11, fig.width=11}
+
+# add in phyla
+phyla <- barplot_RA(biom$RA.Otus,tax = biom$taxon,meta = meta,category = "mfc",top = 5)$top_long %>% 
+  spread(key = variable,value = value) %>% dplyr::rename("mfc" = label)
+phyla$mfc <- as.numeric(as.character(phyla$mfc))
+phyla %>% select(-mfc) %>% apply_transform %>% bind_cols(phyla,.) %>% right_join(rsm_hist,.,by = "mfc") %>% arrange(mfc) -> rsm_hist
+
+data <- rsm_hist %>% select(starts_with("trans"))
+
+# https://cran.r-project.org/web/packages/corrplot/vignettes/corrplot-intro.html
+packages(psych)
+corr.test(data,adjust = "none") -> trans_corr
+#non-adjusted p value matrix is symmetric, BH is not
+p.adjust(trans_corr$p,method = "BH") %>% matrix(.,nrow = nrow(trans_corr$r),ncol = ncol(trans_corr$r)) -> trans_corr$p
+packages(corrplot)
+packages(RColorBrewer)
+#make diagonal excluded
+diag(trans_corr$p) <- 1
+corrplot(trans_corr$r, type = "lower", method = "ellipse",order = "hclust", p.mat = trans_corr$p, sig.level = 0.05, insig = "blank",tl.col = "black", tl.srt = 45)
 ```
 
 
