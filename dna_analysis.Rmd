@@ -61,41 +61,75 @@ source("https://bioconductor.org/biocLite.R")
 packages(microbiome)
 ```
 
-```{r get dummy data, message = FALSE, warning=FALSE}
+```{r get data, message = FALSE, warning=FALSE}
 #metadata
 
-meta <- read_csv("data/meta_dummy.csv") %>% filter(!is.na(`Sample Name`))
+meta <- read_csv("data/meta.csv") %>% filter(!is.na(`Sample Name`))
 #filter for samples of interest (anode here)
 meta <- meta %>% filter(str_sub(`Sample Label`,-1,-1)=="A")
 # meta <- meta %>% filter(str_sub(`Sample Label`,-1,-1)=="A" | str_sub(`Sample Label`,-1,-1)==1|str_sub(`Sample Label`,-1,-1)==2 )
 #paste on suffixes used by sequencing company
-sample_labels_of_interest <- meta %>% select(`Sample Label`) %>% unlist %>% paste("-MS515F",sep = "")
+sample_labels_of_interest <- meta %>% select(`Sample Label`) %>% unlist %>% paste(".515yF.926R",sep = "")
 #filter dna seq data for samples of interest and read in
-dummy_dna_seq_of_interest <- read_tsv("data/dummy_data.txt",skip=1) %>% 
+dna_seq_of_interest <- read_tsv("data/tsv_otu_table.txt",skip=1) %>% 
   select(`#OTU ID`,sample_labels_of_interest,ConsensusLineage)
 
 # have to add in first line "# Constructed from biom file"
-cat("# Constructed from biom file","\n",file="output/dummy_dna_seq_of_interest.txt")
-write.table(dummy_dna_seq_of_interest,file="output/dummy_dna_seq_of_interest.txt",append = TRUE,row.names=FALSE,quote = FALSE,sep = "\t")
+cat("# Constructed from biom file","\n",file="output/dna_seq_of_interest.txt")
+write.table(dna_seq_of_interest,file="output/dna_seq_of_interest.txt",append = TRUE,row.names=FALSE,quote = FALSE,sep = "\t")
 
-biom <- read.biom("output/dummy_dna_seq_of_interest.txt")
-rm(dummy_dna_seq_of_interest)
+biom <- read.biom("output/dna_seq_of_interest.txt")
+rm(dna_seq_of_interest)
 ```
 
 Fix Metadata
 ```{r fix metadata}
 # This section fixes the metadata to match between the metadata labels and the R biome labels
   # Note that R puts an X in front of any column header that starts with a number, and dashes and other special characters are replaced by periods
-labels <- meta %>% select(`Sample Label`) %>% unlist %>% paste("-MS515F",sep = "") 
+labels <- meta %>% select(`Sample Label`) %>% unlist %>% paste(".515yF.926R",sep = "") 
 meta$`Sample Label`<- ifelse(!is.na(as.numeric(str_sub(labels,1,1))), paste("X",labels,sep = ""), paste("",labels,sep = "")) %>% gsub("-",".", .)
 ```
 
-Make dummy data resemble Exp23 RSM data set of 15 samples
+Make metadata resemble Exp23 RSM data set of 15 samples
 ```{r}
 meta <- meta %>% mutate(mfc=as.numeric(str_extract(`Sample Name`,"\\d+")))
 meta <- meta %>% select(`Sample Label`,mfc) %>% left_join(.,read_csv("rsm_hist.csv")[,1:4])
 meta <- meta %>% dplyr::rename(Label = `Sample Label`)
-meta <- as.data.frame(meta)
+meta <- as.data.frame(meta) #microbiome package doesn't always play nice with tibbles
+```
+
+#Sequencing depth and rarefaction curves
+```{r}
+# https://rdrr.io/rforge/vegan/man/rarefy.html
+packages(vegan)
+S <- specnumber(biom$RA.Otus) # observed number of species
+
+# Modify data so that rows are samples, columns are reads per OTU
+rare.data <- biom$biom_tab %>% select(starts_with("X")) # leave off taxonomy on biom_tab
+t.rare.data <- transpose(rare.data) # transpose https://stackoverflow.com/questions/6778908/r-transposing-a-data-frame
+# get row and colnames in order
+  colnames(t.rare.data) <- rownames(rare.data)
+  rownames(t.rare.data) <- colnames(rare.data)
+
+(raremax <- min(rowSums(t.rare.data)))
+Srare <- rarefy(t.rare.data, raremax)
+plot(S, Srare, xlab = "Observed No. of Species", ylab = "Rarefied No. of Species")
+abline(0, 1)
+rarecurve(t.rare.data, step = 20, sample = raremax, col = "blue", cex = 0.6)
+```
+```{r get total reads per sample sequenced}
+# make a long form table we can aggregate
+ix <- which(colnames(biom$biom_tab) %in% c("Kingdom","Phylum","Class","Order","Family","Genus","Species")) # remove taxonomy info
+data <- biom$biom_tab[,-ix] 
+data <- t(data)
+data <- melt(data)
+colnames(data) <- c("Label","OTU","Reads")
+# aggregate reads by label
+agg_data_label <- aggregate(data$Reads,
+    by = list(Label = data$Label),
+    FUN = function(x) c(sum = sum(x)))
+ggplot(agg_data_label, aes(Label,x))+geom_bar(stat="identity")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ylab("Reads")
 ```
 
 #Sample vs OTU
@@ -125,6 +159,7 @@ ggplot(data = ra_plot$top_long,aes(x=factor(label,levels = c("-1","0","0.5","1")
   guides(fill=guide_legend("Phylum"))+
   theme_few()
 ```
+
 ```{r nmds plots}
 veg=vegan_wrapper(biom$RA.Otus,meta = meta,category_1 = "temp",category_2 = "acetate")
 
@@ -138,14 +173,22 @@ NMDS.data <- veg$NMDS_plot$data
 NMDS.data <- NMDS.data %>% mutate_at(vars(category_1,category_2),funs(as.factor))
 
 # https://gist.github.com/rmaia/5296401
- ggplot(data=NMDS.data, aes(x=MDS1, y=MDS2, color=category_1)) + geom_point(aes(shape=category_2),size=3)+
-       scale_shape_manual(name = "Acetate",values=15:18)+
-    # scale_colour_discrete(name = "Temperature")+
-   scale_colour_grey(name = "Temperature", start = 0.2, end = 0.8)
-   
-  
-
+shapes = c(21:24)
+stroke = 1.5
+ ggplot(data=NMDS.data, aes(x=MDS1, y=MDS2, color=category_1)) + geom_point(aes(shape=category_2),size=4,stroke=stroke)+
+       scale_shape_manual(name = "Acetate",values=shapes)+
+    scale_colour_discrete(name = "Temperature")
+   #scale_colour_grey(name = "Temperature", start = 0.2, end = 0.8)
+# zoom in 
+   ggplot(data=NMDS.data, aes(x=MDS1, y=MDS2, color=category_1)) + geom_point(aes(shape=category_2),size=4,stroke=stroke)+
+       scale_shape_manual(name = "Acetate",values=shapes)+
+    scale_colour_discrete(name = "Temperature")+
+   #scale_colour_grey(name = "Temperature", start = 0.2, end = 0.8)+
+     coord_cartesian(xlim = c(.6, .9),ylim = c(-.2,-.1)) 
+rm(shapes)
+rm(stroke)
 ```
+
 ```{r ecological metrics}
 # calc richnness, evenness, diversity each community
 # diversity
@@ -309,7 +352,7 @@ set.seed(101)
 #Samples vs KOs
 ```{r heat maps of KOs across treatments}
 # get metagenome data from PICRUST
-predicted_metagenome = read.biom("C:/Users/Ryan/Google Drive/UC Davis/Dissertation for PhD/data/Exp23/dummy_metagenome.tab",new=T,metagenome=T)
+predicted_metagenome = read.biom("C:/Users/Ryan/Google Drive/UC Davis/Dissertation for PhD/data/Exp23/metagenome.tab",new=T,metagenome=T)
 # predicted_metagenome$RA.genes[1:10,1:10] # View data # Note this gives relative abundance in percent from 0 to 100
 
 # Modify data to align it               -
@@ -329,8 +372,8 @@ genes_filtered <- genes_melt[which(genes_melt$variable %in% unlist(kos_exoelectr
 genes_filtered %>% 
   ggplot(data=.,aes(x=Group.1,y=variable,fill=value))+
   geom_tile()+
-  scale_fill_gradient2("Scaled gene relative abundance \n",guide="colourbar",high="#FF5733",low="#FDFEFE")+
-  xlab("Sample")+
+  scale_fill_gradient2("Gene relative abundance \n",guide="colourbar",high="#FF5733",low="#FDFEFE")+
+  xlab("Temperature")+
   ylab("KEGG Ortholog")
 # Now what if we rescale the data row-wise?
 genes_filtered %>% 
@@ -339,7 +382,7 @@ genes_filtered %>%
   ggplot(data=.,aes(x=Group.1,y=variable,fill=rescale))+
   geom_tile()+
   scale_fill_gradient2("Scaled gene relative abundance \n",guide="colourbar",high="#FF5733",low="#FDFEFE")+
-  xlab("Sample")+
+  xlab("Temperature")+
   ylab("KEGG Ortholog")
 
 # Aggregate genes by sample (try by acetate)
@@ -353,8 +396,8 @@ genes_filtered <- genes_melt[which(genes_melt$variable %in% unlist(kos_exoelectr
 genes_filtered %>% 
   ggplot(data=.,aes(x=Group.1,y=variable,fill=value))+
   geom_tile()+
-  scale_fill_gradient2("Scaled gene relative abundance \n",guide="colourbar",high="#FF5733",low="#FDFEFE")+
-  xlab("Sample")+
+  scale_fill_gradient2("Gene relative abundance \n",guide="colourbar",high="#FF5733",low="#FDFEFE")+
+  xlab("Acetate")+
   ylab("KEGG Ortholog")
 # Now what if we rescale the data row-wise?
 genes_filtered %>% 
@@ -363,7 +406,7 @@ genes_filtered %>%
   ggplot(data=.,aes(x=Group.1,y=variable,fill=rescale))+
   geom_tile()+
   scale_fill_gradient2("Scaled gene relative abundance \n",guide="colourbar",high="#FF5733",low="#FDFEFE")+
-  xlab("Sample")+
+  xlab("Acetate")+
   ylab("KEGG Ortholog")
 
 ```
@@ -384,7 +427,7 @@ rsm_object <- rsm_and_visualize(data = rsm_hist,response_cols = rsm_hist %>% sel
 rsm_object
 
 # how about for the average of all the exoelectrogenic KOs?
-rsm_hist <- rsm_hist %>% select(mfc,starts_with("trans_K")) %>% gather(trans_KO,value,-mfc) %>% group_by(mfc) %>% summarize(trans_KO_average = mean(value)) %>% right_join(rsm_hist,.)
+rsm_hist <- rsm_hist %>% select(mfc,starts_with("trans_K")) %>% gather(trans_KO,value,-mfc) %>% group_by(mfc) %>% summarise(trans_KO_average = mean(value)) %>% right_join(rsm_hist,.)
 rsm_object <- rsm_and_visualize(data = rsm_hist,response_cols = "trans_KO_average")
 rsm_object
 
@@ -393,7 +436,7 @@ rsm_object
 ```{r aggregate KOs by network cluster}
 # Read in metagenome contributions table (takes 2 min to read)
 a <- proc.time()
-ko_metagenome_contributions <- read.table("C:/Users/Ryan/Google Drive/UC Davis/Dissertation for PhD/data/Exp23/dummy_metagenome_contributions.tab", header = T, sep = "\t", fill=TRUE)
+ko_metagenome_contributions <- read.table("C:/Users/Ryan/Google Drive/UC Davis/Dissertation for PhD/data/Exp23/metagenome_contributions.tab", header = T, sep = "\t", fill=TRUE)
 proc.time()-a
 # chop off unnecessary phylogeny
 ko_metagenome_contributions <- ko_metagenome_contributions %>% select(-c(Kingdom,Phylum,Class,Order,Family,Genus,Species))
@@ -540,6 +583,7 @@ ggplot(data=data,aes(x=factor(OTU),y=Gene,fill=relAbundByOTU))+
  scale_y_discrete(expand = c(0,0)) +
  coord_fixed(ratio=1)
 # can do anova on transformed KOs if needed
+
 ```
 # Multivariate Analysis
 ```{r, fig.height=11, fig.width=11}
@@ -547,6 +591,8 @@ ggplot(data=data,aes(x=factor(OTU),y=Gene,fill=relAbundByOTU))+
 # add in phyla
 phyla <- barplot_RA(biom$RA.Otus,tax = biom$taxon,meta = meta,category = "mfc",top = 5)$top_long %>% 
   spread(key = variable,value = value) %>% dplyr::rename("mfc" = label)
+
+target_phyla <- phyla %>% select(-mfc) %>% colnames
 phyla$mfc <- as.numeric(as.character(phyla$mfc))
 phyla %>% select(-mfc) %>% apply_transform %>% bind_cols(phyla,.) %>% right_join(rsm_hist,.,by = "mfc") %>% arrange(mfc) -> rsm_hist
 
@@ -563,5 +609,93 @@ packages(RColorBrewer)
 diag(trans_corr$p) <- 1
 corrplot(trans_corr$r, type = "lower", method = "ellipse",order = "hclust", p.mat = trans_corr$p, sig.level = 0.05, insig = "blank",tl.col = "black", tl.srt = 45)
 ```
+#Next steps from Chris
+At this point, I think the main task is to connect specific OTUs, preferably with genus resolution, to expected exoelectrogenic activity via KO content or the scientific literature. Given the prominence of Thermotogae in the high temperature treatment, we should also comb the community for hydrogenotrophic microbes that may have syntrophic activity with acetate-oxidizing exoelectrogens.
+
+
+Which OTUs were enriched in Cluster 5, our cluster that showed high levels of exoelectrogenic genes and were also enriched at high temperatures?
+```{r}
+target_otus
+target_otus %>% as.character %>% as.numeric %>% tibble(otus=.) %>% left_join(.,biom$taxon)
+```
+Looks like two of the three OTUs in cluster 5 are Thermotogae.
+
+Next, let's downselect for Thermotogae and other phyla and fit it to a response surface.
+```{r}
+response_cols = c("trans_Thermotogae","trans_Proteobacteria","trans_Firmicutes","trans_Bacteroidetes","trans_Tenericutes","trans_Other")
+rsm_object <- rsm_and_visualize(data = rsm_hist,response_cols = response_cols)
+rsm_object
+```
+Looks like all Thermotogae are highly enriched at higher temperatures. In fact, all 5 major phyla fit to our response surface. Bacteroidetes decreases at high temps, as does Proteobacteria, as does Tenericutes. What about the Firmicutes? trans_Firmicutes modeled to our response surface fits only to temperature, and has a global maximum around coded temp = 0.5.
+
+What if we group our metagenome by phyla, then look at a heat map of exoelectrogenic KOs across phyla?
+```{r}
+data <- ko_metagenome_contributions %>% select(-c(OTUAbundanceInSample,CountContributedByOTU,ContributionPercentOfSample,ContributionPercentOfAllSamples))
+
+#attach phylogeny
+data <- data %>% inner_join(biom$taxon,by = c("OTU" = "otus"))
+
+# within each phylum, sum GeneCountPerGenome by Gene, then calculate that gene's relative abundance
+data %>% group_by(Phylum,Gene) %>% summarise(geneCount = sum(GeneCountPerGenome)) %>% group_by(Phylum) %>% mutate(relAbundByPhylum = geneCount / sum(geneCount)) %>% 
+# filter by target KOs
+filter(Gene %in% unlist(kos_exoelectrogenic)) -> data
+  
+  ggplot(data=data,aes(x=Phylum,y=Gene,fill=relAbundByPhylum))+
+  geom_tile()+
+  scale_fill_gradient2("Gene relative abundance \n",guide="colourbar",high="#FF5733",low="#FDFEFE")+
+  xlab("Phylum")+
+  ylab("KEGG Ortholog")+
+  theme_few()+
+ scale_x_discrete(expand = c(0,0))+
+ scale_y_discrete(expand = c(0,0)) +
+ coord_fixed(ratio=1)+
+theme(axis.text.x = element_text(angle = 60, hjust = 1))
+  
+# Rescale 0 to 1 for heat map 
+data %>%
+  group_by(Gene)%>%
+  mutate(rescale = scales::rescale(relAbundByPhylum)) %>%
+  ggplot(data=.,aes(x=Phylum,y=Gene,fill=rescale))+
+  geom_tile()+
+  scale_fill_gradient2("Rescaled gene relative abundance \n",guide="colourbar",high="#FF5733",low="#FDFEFE")+
+  xlab("Cluster")+
+  ylab("KEGG Ortholog")+
+  theme_few()+
+ scale_x_discrete(expand = c(0,0))+
+ scale_y_discrete(expand = c(0,0)) +
+ coord_fixed(ratio=1)+
+theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+Thermotogae does greatly outweigh the other phyla in terms of relative abundance of the KEGG Ortholog K03406.
+
+What happens if we look for OTUs with the highest counts/relative abundances of exoelectrogenic KOs in our high temperature samples?
+This is total counts of exoelectrogenic genes per genome of each OTU, downselected for high temp samples and only exoelectrogenic genes. Two of the top three are Thermotogae.
+```{r}
+data <- ko_metagenome_contributions 
+
+(data2 <- data %>% select(-c(OTUAbundanceInSample,CountContributedByOTU,ContributionPercentOfSample,ContributionPercentOfAllSamples)) %>% inner_join(biom$taxon,by = c("OTU" = "otus")) %>% mutate_at(vars(Sample),funs(paste("X",.,sep=""))) %>% filter(Sample %in% meta$Label[meta$temp==1]) %>% filter(Gene %in% unlist(kos_exoelectrogenic)) %>% group_by(OTU) %>% summarise(exoGeneCountPerGenome = sum(GeneCountPerGenome)) %>% arrange(desc(exoGeneCountPerGenome)) %>% inner_join(biom$taxon,by = c("OTU" = "otus")))
+#what if we insert the number of times each OTU occurred in our high temp samples, and multiply?
+biom$biom_tab %>% select(meta$Label[meta$temp==1]) %>% rownames_to_column(var = "OTU") %>% gather(Label,genomes_per_OTU,-OTU) %>% group_by(OTU) %>% summarise(genomes_per_OTU_high_temp = sum(genomes_per_OTU)) %>% mutate_at(vars(OTU),funs(as.numeric)) %>% left_join(data2,.,by="OTU") %>% select(OTU,exoGeneCountPerGenome,genomes_per_OTU_high_temp,everything()) %>% mutate(totalExoGenesHighTemp = exoGeneCountPerGenome*genomes_per_OTU_high_temp) %>% arrange(desc(totalExoGenesHighTemp)) %>% select(OTU,exoGeneCountPerGenome,genomes_per_OTU_high_temp,totalExoGenesHighTemp,everything())
+# proves each gene-sample-otu combo appears only once, indicating the metagenome contributions are not multiplied by OTU count data
+# data %>% select(-c(OTUAbundanceInSample,CountContributedByOTU,ContributionPercentOfSample,ContributionPercentOfAllSamples)) %>% mutate(combo = paste(Gene,Sample,OTU)) %>% select(combo) -> data2
+# data2 %>% group_by(combo) %>% filter(n()>1)
+
+#What about relative abundance of exo KOs out of all KOs for each specific OTU at high temps?
+ko_metagenome_contributions %>% select(-c(OTUAbundanceInSample,CountContributedByOTU,ContributionPercentOfSample,ContributionPercentOfAllSamples)) %>% mutate_at(vars(Sample),funs(paste("X",.,sep=""))) %>% filter(Sample %in% meta$Label[meta$temp==1]) %>% 
+#deduplicate gene-OTU combos across multiple samples
+group_by(OTU) %>% distinct(Gene,.keep_all = TRUE) %>% 
+#mutate rel abun
+  group_by(OTU) %>% mutate(geneRelAbundPerGenome = GeneCountPerGenome/sum(GeneCountPerGenome)) %>% filter(Gene %in% unlist(kos_exoelectrogenic)) %>% ungroup %>% group_by(OTU) %>% summarise(avgExoGeneRelAbundPerGenome = mean(geneRelAbundPerGenome)) %>% arrange(desc(avgExoGeneRelAbundPerGenome)) %>% 
+  #attach taxonomy
+  left_join(biom$taxon,by = c("OTU" = "otus"))
+  
+
+```
+This shows that at high temperatures, Thermotoga have both high counts of exoelectrogenic genes per genome as well as the highest total exoelectrogenic gene counts when gene counts per genome are multiplied by their OTU abundance. Finally, Thermotoga have the highest average exoelectrogenic gene relative abundance per genome.
+
+What would the hydrogenotroph be? A firmicute since that was the other main phyla in the high temperature MFCs? The other OTU in Cluster 5?
+Lit review on firmicutes and hydrogenotrophy
+Lit review on Cluster 5 symbiont and hydrogenotrophy
+Can I detect Archaea?
 
 
