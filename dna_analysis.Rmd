@@ -132,6 +132,9 @@ ggplot(agg_data_label, aes(Label,x))+geom_bar(stat="identity")+
   theme(axis.text.x = element_text(angle = 45, hjust = 1))+ylab("Reads")
 ```
 
+
+
+
 #Sample vs OTU
 ```{r Simple Relative Abundance}
 # Here we can make our generic barplot of relative abundance. We can also then transform it into something fancier!
@@ -465,6 +468,19 @@ filt_ko_metagenome_contributions <- filt_ko_metagenome_contributions[which(filt_
 # tidy up names
 colnames(filt_ko_metagenome_contributions) <- c("Gene","Cluster","GeneCount","relAbund")
 
+
+#heat map
+filt_ko_metagenome_contributions %>%  
+    ggplot(data=.,aes(x=factor(Cluster),y=Gene,fill=relAbund))+
+  geom_tile()+
+  scale_fill_gradient2("Gene relative abundance \n",guide="colourbar",high="#FF5733",low="#FDFEFE")+
+  xlab("Cluster")+
+  ylab("KEGG Ortholog")+
+  theme_few()+
+ scale_x_discrete(expand = c(0,0))+
+ scale_y_discrete(expand = c(0,0)) +
+ coord_fixed(ratio=1)
+
 # Rescale 0 to 1 for heat map
 filt_ko_metagenome_contributions %>%  
   group_by(Gene)%>% 
@@ -547,6 +563,9 @@ rsm_object
 rsm_object <- rsm_and_visualize(data = rsm_hist,response_cols = rsm_hist %>% select(starts_with("trans_cluster")) %>% colnames)
 rsm_object
 ```
+
+
+
 #KOs vs OTUs
 ```{r}
 clusofinterest
@@ -617,6 +636,48 @@ Which OTUs were enriched in Cluster 5, our cluster that showed high levels of ex
 ```{r}
 target_otus
 target_otus %>% as.character %>% as.numeric %>% tibble(otus=.) %>% left_join(.,biom$taxon)
+
+df <- biom$biom_tab%>% select(-match(taxaNames,names(.))) %>% rownames_to_column(var="OTU") %>% filter(OTU %in% target_otus) %>% gather(Label,reads,-OTU) %>% left_join(.,rsm_hist %>% select(Label,temp,acetate),by="Label")
+
+df %>% ggplot(data = ., aes(x = "", y = reads, fill = OTU )) + 
+    geom_bar(stat = "identity", position = position_fill(),width=1)+
+  coord_polar("y", start=0)+
+  theme_few()+
+  facet_wrap(~ temp)+
+  theme(axis.title.x = element_blank(),
+    axis.title.y = element_blank())+
+  ggtitle("Cluster 5 OTUs")
+   
+#chi square for cluster 5
+# https://stats.stackexchange.com/questions/2391/what-is-the-relationship-between-a-chi-squared-test-and-test-of-equal-proportion
+mydata <- ko_metagenome_contributions
+# chop off unneccesary columns
+mydata[5:8] <- list(NULL)
+
+# fix labels
+names(mydata)[names(mydata) == 'Sample'] <- 'Label'
+mydata$Label = paste("X",mydata$Label,sep = "")
+mydata$Label = gsub("-",".",mydata$Label)
+  
+# filter for anodes
+mydata <- mydata %>% filter(Label %in% meta$Label)
+
+# make column for Cluster5 yes/no
+mydata$Cluster5 <- ifelse(mydata$Cluster == 5,TRUE,FALSE)  
+
+# make column for exoelectrogenic KO yes/no
+mydata$exoelectrogenic_ko <- ifelse(mydata$Gene %in% unlist(kos_exoelectrogenic),TRUE,FALSE)  
+
+# note that data is in the form of counts
+# make contingency table
+ctable <- xtabs(GeneCountPerGenome ~ Cluster5+exoelectrogenic_ko,data=mydata)
+head(ctable)
+# visualize
+packages(vcd)
+mosaic(ctable,shade=T,legend=T)
+# get proportions
+prop.table(ctable,1)
+chisq.test(ctable)
 ```
 Looks like two of the three OTUs in cluster 5 are Thermotogae.
 
@@ -694,8 +755,374 @@ group_by(OTU) %>% distinct(Gene,.keep_all = TRUE) %>%
 This shows that at high temperatures, Thermotoga have both high counts of exoelectrogenic genes per genome as well as the highest total exoelectrogenic gene counts when gene counts per genome are multiplied by their OTU abundance. Finally, Thermotoga have the highest average exoelectrogenic gene relative abundance per genome.
 
 What would the hydrogenotroph be? A firmicute since that was the other main phyla in the high temperature MFCs? The other OTU in Cluster 5?
-Lit review on firmicutes and hydrogenotrophy
-Lit review on Cluster 5 symbiont and hydrogenotrophy
-Can I detect Archaea?
+Lit review on firmicutes and hydrogenotrophy - the firmicutes Clostridia and Bacilli have lots of EEG's
+Clostridia are anaerobes, Bacilli are facultative
+
+
+```{r}
+#Cluster 5 symbiont and hydrogenotrophy?
+target_otus %>% as.character %>% as.numeric %>% tibble(otus=.) %>% left_join(.,biom$taxon)
+
+```
+https://microbewiki.kenyon.edu/index.php/Bacteroides
+Bacteroides are gram-negative, nonsporeforming, anaerobic, and rod-shaped bacteria. They have an outer membrane, a peptidoglycan layer, and a cytoplasmic membrane. The main by-products of their anaerobic respiration are acetic acid, iso valeric acid, and succinic acid. They are involved in many important metabolic activities in the human colon including fermentation of carbohydrates, utilization of nitrogenous substances, and biotransformation of bile acids and other steroids.
+-> This group is possibly symbiotic with Thermotoga.
+
+
+Methanogenesis is limited to archaea.
+Can I detect Archaea? Only k_Bacteria listed in my taxonomy file. But I downselected for MFC anodes. Any in sludge?  
+```{r}
+fullBiom <- read.biom("data/tsv_otu_table.txt")
+fullBiom %>% summary
+fullBiom$biom_tab %>% group_by(Kingdom) %>% summarise(n())
+fullBiom$biom_tab %>% filter(Kingdom == "k__Archaea") %>% gather(key,value,-c(Kingdom,Phylum,Class,Order,Family,Genus,Species)) %>% filter(value>0) %>% select(key,value,everything())
+
+#Is there evidence that our lack of archaea is a function of binned otus?
+dfArchTF <- fullBiom$biom_tab %>% filter(Kingdom == "k__Archaea") %>% gather(Label,value,-c(Kingdom,Phylum,Class,Order,Family,Genus,Species)) %>% select(Label,value) %>% mutate(archTF = value>1)
+
+taxaNames <- c("Kingdom","Phylum","Class","Order","Family","Genus","Species")
+
+df <- fullBiom$biom_tab %>% select(-match(taxaNames,names(.))) %>% rownames_to_column(var="OTU") %>% gather(Label,value,-OTU) %>% group_by(Label) %>% summarise(totalBins = sum(value)) %>% left_join(.,dfArchTF,by="Label")
+df
+#binomial logistic regression
+df %>% ggplot(aes(x=totalBins,y=value))+geom_point()+ylab("archaeal bins")+xlab("total bins per sample")
+
+model <- glm(archTF ~ totalBins,family=binomial(link='logit'),data=df)
+model %>% summary
+```
+So Archaea were detected, but not on the anode biofilm. They were detected in small amounts in the sludge inoculum, the bulk liquid, and one of the air cathodes.
+
+Are there any archaea in the analysis from RTL? Yes, exact same counts on those exact same samples.
+Also, RTL indicates my highly enriched thermotoga are Defluvitoga tunisiensis.
+
+Any hydrogenotroph KOs on KEGG?
+http://www.genome.jp/kegg-bin/get_htext#B12 was searched for hydrogenases, which all have EC numbers starting with 1.12.
+```{r}
+hydrogenaseKOdf <- read_csv("data/hydrogenaseKOs.csv",col_names = FALSE)
+hydrogenaseKOdf <- hydrogenaseKOdf %>% unite(.,"description",X2:X9,sep = " ") %>% dplyr::rename(KO = X1)
+hydrogenaseKO <- hydrogenaseKOdf %>% select(KO) %>% unlist %>% sort
+hydrogenaseKO
+```
+Were any of these KOs in my anode metagenome?
+```{r}
+targetHydrogenaseKO <- predicted_metagenome$RA.genes %>% colnames %>% .[which(. %in% hydrogenaseKO)] %>% sort
+targetHydrogenaseKO
+length(targetHydrogenaseKO)
+data <- predicted_metagenome$RA.genes %>% select(targetHydrogenaseKO) %>% rownames_to_column(var = "Label") %>%   #remove columns with all zeros
+  gather(KO,RA,-Label) %>% filter(RA>0)
+data
+data %>% lm(RA~KO,data=.) %>% summary
+data %>% aov(RA~KO,data=.) %>% TukeyHSD -> Tukey
+Tukey$KO[Tukey$KO[,4]<.05,]
+data %>% ggplot(aes(x=KO,y=RA))+geom_boxplot()+xlab("Hydrogenase KO")+ylab("RA across all samples (%)")
+
+#Fit to our response surface?
+#First each KO - spread and replace NA with zero
+rsm_hist <- data %>% spread(.,KO,RA) %>% mutate_all(funs(replace(., is.na(.), 0))) %>% mutate_at(vars(starts_with("K")),funs(trans = mutate_transform(.))) %>% left_join(rsm_hist,.,by = "Label")
+
+
+targetHydrogenaseKO[which(targetHydrogenaseKO %in% colnames(rsm_hist))]->targetHydrogenaseKO
+targetHydrogenaseKO->response_cols
+rsm_object <- rsm_and_visualize(data = rsm_hist,response_cols = response_cols)
+rsm_object
+
+
+rsm_hist %>% select(ends_with("trans")) %>% colnames -> response_cols
+rsm_object <- rsm_and_visualize(data = rsm_hist,response_cols = response_cols)
+rsm_object
+
+# try with average hydrogenase KO content
+rsm_hist %>% select(Label,targetHydrogenaseKO) %>% gather(key,value,-Label) %>% group_by(Label) %>% summarise(avgHydrKO = mean(value)) %>% left_join(rsm_hist,.,by = "Label") -> rsm_hist
+
+rsm_hist %>% select(Label,ends_with("trans")) %>% gather(key,value,-Label) %>% group_by(Label) %>% summarise(avgHydrKO_trans = mean(value)) %>% left_join(rsm_hist,.,by = "Label") -> rsm_hist
+
+rsm_hist %>% select(starts_with("avgHydr")) %>% colnames -> response_cols
+rsm_object <- rsm_and_visualize(data = rsm_hist,response_cols = response_cols)
+rsm_object
+
+
+```
+Interesting - looks like K00436, a hydrogenase KO, was found extensively across all samples. The average Hydrogenase KO content did not fit to our response surface. K00441 fits to our response surface. K00533 fits to our response surface as well. Notably, K00533 was enriched in our high temperature samples. Next question: which clusters and OTUs contain the highest levels of K00533?
+```{r screen OTUs for target Hydrogenase KOs}
+# get metagenome contributions from high temp samples
+data <- ko_metagenome_contributions %>% select(-c(OTUAbundanceInSample,CountContributedByOTU,ContributionPercentOfSample,ContributionPercentOfAllSamples)) %>% mutate_at(vars(Sample),funs(paste("X",.,sep=""))) %>% filter(Sample %in% meta$Label[meta$temp==1]) 
+# filter for K00533 and sort high to low
+data %>% filter(Gene == "K00533") # this gene contained in these samples from these OTUs
+data %>% filter(Gene == "K00533") %>% select(OTU) %>% unique %>% left_join(.,biom$taxon,by = c("OTU"="otus"))
+# sum by all target Hydrogenase KOs and sort
+data2 <- data %>% filter(Gene %in% targetHydrogenaseKO) %>% filter(Sample %in% meta$Label[meta$temp==1]) %>% group_by(OTU) %>% distinct(Gene,.keep_all = TRUE) %>% summarise(hydrGeneCountPerGenome = sum(GeneCountPerGenome)) %>% arrange(desc(hydrGeneCountPerGenome)) %>% left_join(.,biom$taxon,by = c("OTU"="otus"))
+data2
+#what if we insert OTU counts and multiply to get total hydrogenotrophic genes at high temps?
+(df <- biom$biom_tab %>% select(meta$Label[meta$temp==1]) %>% rownames_to_column(var = "OTU") %>% gather(Label,genomes_per_OTU,-OTU) %>% group_by(OTU) %>% summarise(genomes_per_OTU_high_temp = sum(genomes_per_OTU)) %>% mutate_at(vars(OTU),funs(as.numeric)) %>% left_join(data2,.,by="OTU") %>% select(OTU,hydrGeneCountPerGenome,genomes_per_OTU_high_temp,everything()) %>% mutate(totalHydrGenesHighTemp = hydrGeneCountPerGenome*genomes_per_OTU_high_temp) %>% arrange(desc(totalHydrGenesHighTemp)) %>% select(OTU,hydrGeneCountPerGenome,genomes_per_OTU_high_temp,totalHydrGenesHighTemp,everything()))
+
+#take these hydrogenotrophic OTUs, average their relative abundance in each label, then fit to response surface
+hydrOTU <-  df %>% select(OTU) %>% unlist %>% as.character
+rsm_hist <- biom$RA.Otus %>% rownames_to_column(var = "Label") %>% gather(key,value,-Label) %>% filter(key %in% hydrOTU) %>% group_by(Label) %>% summarise(avgAllHydrOTU = mean(value)) %>% mutate(trans_avgAllHydrOTU = mutate_transform(avgAllHydrOTU)) %>% left_join(rsm_hist,.,by="Label")
+#fit to response surface
+rsm_hist %>% select(contains("avgAllHydrOTU")) %>% colnames -> response_cols
+rsm_object <- rsm_and_visualize(data = rsm_hist,response_cols = response_cols)
+rsm_object
+
+rsm_object$dfVariable$fitVariable[2] %>% unlist(recursive = FALSE) %>% structure(class = "lm") -> model
+newdat = data.frame(temp = seq(min(rsm_hist$temp),max(rsm_hist$temp),length.out = 100))
+newdat$pred = predict(model, newdata = newdat)
+plot(trans_avgAllHydrOTU ~ temp, data = rsm_hist, main = "trans_avgAllHydrOTU fit to temp (AIC model)")
+with(newdat, lines(x = temp, y = pred))
+
+
+```
+Interesting. If we average the relative abundance of all the OTUs containing hydrogenotrophic genes, it fits to temperature but not acetate, and reaches saturation at higher temperatures.
+
+Haloplasmatales is strictly anaerobic and halophilic and has an optimum temperature for growth of about 30 to 37°C and an optimum pH of about 7. Nitrate and nitrite are reduced; lactate is a fermentation product. (http://jb.asm.org/content/190/10/3580.full)
+
+Maybe Halanaerobiaceae? Within the Halobacteroidaceae, a greater metabolic diversity is found, with some species displaying a homoacetogenic metabolism; growth by anaerobic respiration using different electron acceptors including nitrate, trimethylamine.-oxide, selenate, arsenate, or Fe(III); or chemolithoautotrophic growth on hydrogen and elemental sulfur.
+```{r}
+#what if we fit these OTUs with high numbers of hydrogenotrophic genes to our response surface?
+rsm_temp <- rsm_hist %>% select(mfc,type,temp,acetate,Label)
+
+targetHydrogenaseOTU <- data2 %>% select(OTU) %>% unlist %>% as.character
+targetHydrogenaseOTU <- targetHydrogenaseOTU[targetHydrogenaseOTU %in% colnames(biom$RA.Otus)]
+data <- biom$RA.Otus %>% select(targetHydrogenaseOTU) %>% rownames_to_column(var = "Label") %>% left_join(rsm_temp,.,by = "Label") %>% mutate_at(vars(-c(mfc,type,temp,acetate,Label)),funs(trans = mutate_transform))
+
+data %>% select(ends_with("trans")) %>% colnames -> response_cols
+rsm_object <- rsm_and_visualize(data = data,response_cols = response_cols)
+rsm_object
+
+# These are the hydrogenotrophic OTUs that fit our reponse surface
+rsm_object$dfVariableSumm %>% filter(p.value<.05)
+rsm_object$dfVariableSumm %>% filter(p.value<.05) %>% select(variable) %>% unlist %>% str_replace_all(.,"_trans","") %>% as.numeric %>% tibble(OTU=.) %>% left_join(.,biom$taxon,by = c("OTU"="otus"))
+fitTargetHydrogenaseOTU <- rsm_object$dfVariableSumm %>% filter(p.value<.05) %>% select(variable) %>% unlist %>% str_replace_all(.,"_trans","")
+
+data %>% select(temp,fitTargetHydrogenaseOTU) %>% gather(OTU,RA,-temp) %>% ggplot(aes(x=temp,y=RA))+geom_point()+facet_wrap(~OTU,scales="free")
+
+#Did these target hydrogenase OTUs cluster in our network? Nope
+fitTargetHydrogenaseOTU %>% as.numeric %>% match(.,otu_cluster_lookup$OTU)
+
+#Did any of these target hydrogenase OTUs correlate with our trans_Thermotoga?
+mycols <- rsm_object$dfVariableSumm %>% filter(p.value<.05) %>% select(variable) %>% unlist
+corrdata <- data %>% select(Label,mycols) %>% left_join(.,rsm_hist %>% select(Label,trans_Thermotogae)) %>% select(-Label)
+
+# https://cran.r-project.org/web/packages/corrplot/vignettes/corrplot-intro.html
+packages(psych)
+corr.test(corrdata,adjust = "none") -> trans_corr
+#non-adjusted p value matrix is symmetric, BH is not
+p.adjust(trans_corr$p,method = "BH") %>% matrix(.,nrow = nrow(trans_corr$r),ncol = ncol(trans_corr$r)) -> trans_corr$p
+packages(corrplot)
+packages(RColorBrewer)
+#make diagonal excluded
+diag(trans_corr$p) <- 1
+corrplot(trans_corr$r, type = "lower", method = "ellipse",order = "hclust", p.mat = trans_corr$p, sig.level = 0.05, insig = "blank",tl.col = "black", tl.srt = 45)
+
+
+```
+These hydrogenotrophic OTUs dont' seem to correlate with Thermotogae, either Pearson or Spearman, although their reponse surfaces look similar.
+
+Do none of the potentially hydrogenotrophic OTUs correlate with Thermotogae RA on their own?
+```{r}
+# get metagenome contributions from all samples
+df <- ko_metagenome_contributions %>% select(-c(OTUAbundanceInSample,CountContributedByOTU,ContributionPercentOfSample,ContributionPercentOfAllSamples)) %>% mutate_at(vars(Sample),funs(paste("X",.,sep="")))
+
+# filter for hydrogenase KOs
+df <- df %>% filter(Gene %in% targetHydrogenaseKO)
+
+
+corrdata <- biom$RA.Otus %>% rownames_to_column(var = "Label") %>% gather(key,value,-Label) %>% filter(key %in% (df %>% select(OTU) %>% unlist %>% unique)) %>% spread(key,value) %>% left_join(rsm_temp,.,by="Label") %>% left_join(rsm_hist %>% select(Label,trans_Thermotogae),.,by = "Label") %>% select(-Label,-mfc,-type,-temp,-acetate)
+
+# https://cran.r-project.org/web/packages/corrplot/vignettes/corrplot-intro.html
+packages(psych)
+corr.test(corrdata,adjust = "none") -> trans_corr
+#non-adjusted p value matrix is symmetric, BH is not
+p.adjust(trans_corr$p,method = "BH") %>% matrix(.,nrow = nrow(trans_corr$r),ncol = ncol(trans_corr$r)) -> trans_corr$p
+packages(corrplot)
+packages(RColorBrewer)
+#make diagonal excluded
+diag(trans_corr$p) <- 1
+corrplot(trans_corr$r, type = "lower", method = "ellipse",order = "hclust", p.mat = trans_corr$p, sig.level = 0.05, insig = "blank",tl.col = "black", tl.srt = 45)
+
+
+# Are these 4 OTUs also the most abundant potential hydrogenotrophs in these communities? Yes, in our high temp samples.
+biom$RA.Otus %>% rownames_to_column(var = "Label") %>% gather(key,value,-Label) %>% filter(key %in% (df %>% select(OTU) %>% unlist %>% unique)) %>% spread(key,value) %>% left_join(rsm_temp,.,by="Label") %>% select(-mfc,-type,-temp,-acetate) %>% gather(key,value,-Label) %>% mutate(log_RA = log10(value),color = key %in% c(1105176,153243,242302,784950)) %>% ggplot(aes(x=Label,y=log_RA,colour = color))+geom_point()+theme(axis.text.x = element_text(angle = 60, hjust = 1))+scale_colour_discrete(name="OTU fits significantly to temperature")+xlab("Sample")+ylab("Log 10 Relative Abundance")
+
+pot_hydrogenotrophs <- df %>% select(OTU) %>% unlist %>% unique
+
+
+# Do these 4 OTUs have the most total hydrogenotrophic genes in these communities?
+df <- ko_metagenome_contributions %>% filter(Gene %in% targetHydrogenaseKO) %>% group_by(OTU) %>% distinct(Gene,.keep_all = TRUE) %>% summarise(hydrGeneCountPerGenome = sum(GeneCountPerGenome)) %>% arrange(desc(hydrGeneCountPerGenome))
+
+biom$biom_tab %>% rownames_to_column(var = "OTU") %>% select(-match(taxaNames,names(.))) %>% gather(Label,genomes_per_OTU,-OTU) %>% mutate_at(vars(OTU,genomes_per_OTU),funs(as.numeric)) %>% filter(OTU %in% pot_hydrogenotrophs) %>% left_join(.,df,by="OTU") %>% mutate(totalHydrGenes = genomes_per_OTU*hydrGeneCountPerGenome) %>% mutate(log_totalHydrGenes = log10(totalHydrGenes)) %>% 
+  mutate(color = OTU %in% c(1105176,153243,242302,784950)) %>% 
+  ggplot(aes(x=Label,y=log_totalHydrGenes,colour = color))+
+  geom_point()+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))+
+  scale_colour_discrete(name="Four Down Selected OTUs")
+ 
+# can we do a line plot of %RA fit to temperature for each pot hydrogenotroph? Color by OTU name.
+biom$RA.Otus %>% rownames_to_column(var = "Label") %>% gather(key,value,-Label) %>% filter(key %in% pot_hydrogenotrophs) %>% spread(key,value) %>% left_join(rsm_temp,.,by="Label") %>% select(-c(mfc,type,acetate,Label)) %>% gather(key,value,-temp) %>% group_by(temp,key) %>% summarise(avg = mean(value)) %>% mutate(log_avg = log10(avg)) %>% 
+  ggplot(aes(x=temp, y=log_avg, group=key)) +
+  geom_line(aes(color=key))+
+  geom_point(aes(color=key))+
+  xlab("Temperature")+
+  ylab("Log 10 Relative Abundance")+
+  scale_colour_discrete(name="OTU")+
+  theme_few()
+  
+```
+
+
+Were there more hydrogenotrophic KOs in Cluster 5, our one cluster enriched at higher temperatures?
+```{r No hydrogenotrophic KOs in Cluster 5}
+#No hydrogenotrophic KOs in Cluster 5
+targetHydrogenaseKO
+ko_metagenome_contributions %>% select(-c(OTUAbundanceInSample,CountContributedByOTU,ContributionPercentOfSample,ContributionPercentOfAllSamples)) %>% mutate_at(vars(Sample),funs(paste("X",.,sep=""))) %>% filter(Cluster == 5) %>% filter(Gene %in% targetHydrogenaseKO)
+```
+What if we average counts across all hydrogenotrophic OTUs?
+Then avg hydrogenotroph OTU RA fits well to temperature, and correlates well with Thermotogae.
+```{r}
+rsm_hist <- data %>% select(Label,mycols) %>% gather(OTU,value,-Label) %>% group_by(Label) %>% summarise(trans_avgFitHydrOTU = mean(value)) %>% left_join(rsm_hist,.,by = "Label")
+
+rsm_object <- rsm_and_visualize(data = rsm_hist,response_cols = "trans_avgFitHydrOTU")
+rsm_object
+# correlation between thermotoagae and trans_avgFitHydrOTU
+packages(ggpubr)
+rsm_hist %>% select(Label,temp,acetate,trans_avgFitHydrOTU) %>% left_join(rsm_hist %>% select(Label,trans_Thermotogae)) %>%  ggplot(aes(trans_Thermotogae,trans_avgFitHydrOTU))+geom_point()+geom_smooth(method="lm")+stat_cor()
+
+#Total RA instead of avg RA?
+
+data %>% select(Label,mycols) %>% gather(OTU,value,-Label) %>% group_by(Label) %>% summarise(trans_sumFitHydrOTU = sum(value)) %>% left_join(rsm_hist,.,by = "Label") %>% ggplot(aes(trans_Thermotogae,trans_sumFitHydrOTU))+geom_point()+geom_smooth(method="lm")+stat_cor()
+```
+#Final multivariate analysis
+```{r, fig.height=11, fig.width=11}
+df <- rsm_hist %>% select(contains("trans"))
+# https://cran.r-project.org/web/packages/corrplot/vignettes/corrplot-intro.html
+packages(psych)
+corr.test(df,adjust = "none") -> trans_corr
+#non-adjusted p value matrix is symmetric, BH is not
+p.adjust(trans_corr$p,method = "BH") %>% matrix(.,nrow = nrow(trans_corr$r),ncol = ncol(trans_corr$r)) -> trans_corr$p
+packages(corrplot)
+packages(RColorBrewer)
+#make diagonal excluded
+diag(trans_corr$p) <- 1
+corrplot(trans_corr$r, type = "lower", method = "ellipse",order = "hclust", p.mat = trans_corr$p, sig.level = 0.05, insig = "blank",tl.col = "black", tl.srt = 45)
+```
+
+
+#Modeling power based on biofilm properties
+See if I can build a model for power metrics based on biofilm properties (structure and phylogeny)
+```{r}
+# make sure all relevant biofilm data has been added to rsm_hist
+colNames <- rsm_hist %>% select(contains("trans")) %>% colnames
+strMetrics <- c("trans_PI"     ,             "trans_SG"      ,           "trans_live_dead"  )
+powerMetrics <- c("trans_charge_C","trans_ce","trans_delta_cod_mg_L"    ,  "trans_delta_cod_mg_L_day",  "trans_voltage",  "trans_cycle_5_energy_J"  ,  "trans_cumulative_energy_J")
+phyMetrics <- colNames[!(colNames %in% strMetrics) & !(colNames %in% powerMetrics)]
+
+#model
+#note that step needs an explicit data frame in the model call
+df <- rsm_hist %>% select(trans_cumulative_energy_J,strMetrics)
+lm(trans_cumulative_energy_J ~ (.)^2, data = df) %>% step(trace = 0,.) %>% summary
+
+df <- rsm_hist %>% select(trans_cumulative_energy_J,trans_avgAllHydrOTU,trans_avgFitHydrOTU)
+lm(trans_cumulative_energy_J ~ (.)^2, data = df) %>% step(trace = 0,.) %>% summary
+
+df <- rsm_hist %>% select(trans_cumulative_energy_J,trans_avgFitHydrOTU)
+lm(trans_cumulative_energy_J ~ (.)^2, data = df) %>% step(trace = 0,.) %>% summary
+
+df <- rsm_hist %>% select(trans_cumulative_energy_J,trans_Thermotogae,trans_avgFitHydrOTU)
+lm(trans_cumulative_energy_J ~ (.)^2, data = df) %>% step(trace = 0,.) %>% summary
+
+df <- rsm_hist %>% select(trans_cumulative_energy_J,strMetrics,trans_Thermotogae)
+lm(trans_cumulative_energy_J ~ (.)^2, data = df) %>% step(trace = 0,.) %>% summary
+#leaving at this for now, since cumulative energy has been our best dependent variable fitted to our response surface
+```
+Note that the best prediction of cumulative energy production is Thermotogae, not thermotogae combined with avgFitHydrOTU.
+We get a decent model if we include all the structural metrics and Thermotogae relative abundance.
+
+Plot residuals for selected model
+```{r fig.height=9, fig.width=9}
+df <- rsm_hist %>% select(trans_cumulative_energy_J,strMetrics,trans_Thermotogae)
+model <- lm(trans_cumulative_energy_J ~ (.)^2, data = df) %>% step(trace = 0,.)
+par(mfrow = c(2, 2))
+plot(model)
+#looks like some non-normality in the QQ plot. let's plot for each predictor and see what happens
+# https://drsimonj.svbtle.com/visualising-residuals
+# Obtain predicted and residual values
+df$predicted <- predict(model)
+df$residuals <- residuals(model)
+
+# Create plot
+df %>% 
+  gather(key = "iv", value = "x", -trans_cumulative_energy_J, -predicted, -residuals) %>%
+  ggplot(aes(x = x, y = trans_cumulative_energy_J)) +
+  geom_segment(aes(xend = x, yend = predicted), alpha = .2) +
+  geom_point(aes(color = residuals)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red") +
+  guides(color = FALSE) +
+  geom_point(aes(y = predicted), shape = 1) +
+  facet_grid(~ iv, scales = "free") +
+  theme_few()
+
+#try again with squared terms?
+df <- rsm_hist %>% select(trans_cumulative_energy_J,strMetrics,trans_Thermotogae)
+model <- lm(trans_cumulative_energy_J ~ I(trans_SG^2)+trans_PI+trans_live_dead+trans_Thermotogae+(.)^2, data = df) %>% step(trace = 0,.)
+summary(model)
+par(mfrow = c(2, 2))
+plot(model)
+
+df <- rsm_hist %>% select(trans_cumulative_energy_J,strMetrics,trans_Thermotogae)
+model <- lm(trans_cumulative_energy_J ~ I(trans_SG^2)+I(trans_PI^2)+trans_live_dead+trans_Thermotogae+(.)^2, data = df) %>% step(trace = 0,.)
+summary(model)
+par(mfrow = c(2, 2))
+plot(model)
+
+df <- rsm_hist %>% select(trans_cumulative_energy_J,strMetrics,trans_Thermotogae)
+model <- lm(trans_cumulative_energy_J ~ I(trans_PI^2)+I(trans_live_dead^2)+trans_Thermotogae+(.)^2, data = df) %>% step(trace = 0,.)
+summary(model)
+par(mfrow = c(2, 2))
+plot(model)
+
+df <- rsm_hist %>% select(trans_cumulative_energy_J,strMetrics,trans_Thermotogae)
+model <- lm(trans_cumulative_energy_J ~ I(trans_PI^2)+I(trans_Thermotogae^2)+(.)^2, data = df) %>% step(trace = 0,.)
+summary(model)
+par(mfrow = c(2, 2))
+plot(model)
+
+#After looking at all the squared terms of our predictor variables, it actually makes our model worse!
+```
+
+```{r fig.height=9, fig.width=9}
+#best (original) model
+df <- rsm_hist %>% select(trans_cumulative_energy_J,strMetrics,trans_Thermotogae)
+model <- lm(trans_cumulative_energy_J ~ (.)^2, data = df) %>% step(trace = 0,.)
+par(mfrow = c(2, 2))
+plot(model)
+```
+
+#Summed RA for the potential hydrogenotrophs? RSM? Correlates with thermotogae?
+```{r}
+df <- biom$RA.Otus %>% rownames_to_column(var = "Label") %>% gather(key,value,-Label) %>% filter(key %in% pot_hydrogenotrophs) %>% group_by(Label) %>% summarise(sum_RA = sum(value)) %>% mutate_at(vars(sum_RA),funs(trans_sum_RA_pot_hydr = mutate_transform(.))) %>% select(Label,trans_sum_RA_pot_hydr)
+df
+
+#correlates with thermotogae? Negatively
+df %>% left_join(rsm_hist,by="Label") %>% ggplot(aes(trans_Thermotogae,trans_sum_RA_pot_hydr))+geom_point()+geom_smooth(method="lm")+stat_cor()
+
+
+#RSM - doesn't fit significantly to response surface of temp or acetate
+rsm_object <- rsm_and_visualize(data = df %>% left_join(rsm_hist,by="Label"),response_cols = "trans_sum_RA_pot_hydr")
+rsm_object
+
+#what about gene presence fit to RSM and thermotogae?
+df <- ko_metagenome_contributions %>% filter(Gene %in% targetHydrogenaseKO) %>% group_by(OTU) %>% distinct(Gene,.keep_all = TRUE) %>% summarise(hydrGeneCountPerGenome = sum(GeneCountPerGenome)) %>% arrange(desc(hydrGeneCountPerGenome))
+# gene presence doesn't correlate significantly with thermotogae
+biom$biom_tab %>% rownames_to_column(var = "OTU") %>% select(-match(taxaNames,names(.))) %>% gather(Label,genomes_per_OTU,-OTU) %>% mutate_at(vars(OTU,genomes_per_OTU),funs(as.numeric)) %>% filter(OTU %in% pot_hydrogenotrophs) %>% left_join(.,df,by="OTU") %>% mutate(totalHydrGenes = genomes_per_OTU*hydrGeneCountPerGenome) %>% as_tibble %>% group_by(Label) %>% summarise(sumtotalHydrGenes = sum(totalHydrGenes)) %>% mutate_at(vars(sumtotalHydrGenes),funs(transsumtotalHydrGenes = mutate_transform(.))) %>% 
+  left_join(rsm_hist,by="Label") %>% ggplot(aes(trans_Thermotogae,transsumtotalHydrGenes))+geom_point()+geom_smooth(method="lm")+stat_cor()
+
+# hydrogenotrophic gene presence fit to rsm - not significant
+biom$biom_tab %>% rownames_to_column(var = "OTU") %>% select(-match(taxaNames,names(.))) %>% gather(Label,genomes_per_OTU,-OTU) %>% mutate_at(vars(OTU,genomes_per_OTU),funs(as.numeric)) %>% filter(OTU %in% pot_hydrogenotrophs) %>% left_join(.,df,by="OTU") %>% mutate(totalHydrGenes = genomes_per_OTU*hydrGeneCountPerGenome) %>% as_tibble %>% group_by(Label) %>% summarise(sumtotalHydrGenes = sum(totalHydrGenes)) %>% mutate_at(vars(sumtotalHydrGenes),funs(transsumtotalHydrGenes = mutate_transform(.))) %>% 
+  left_join(rsm_hist,by="Label") %>% rsm_and_visualize(data=.,response_cols = "transsumtotalHydrGenes")
+  
+
+```
+
+
+
 
 
